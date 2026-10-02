@@ -1,5 +1,10 @@
 import type { NextConfig } from "next";
 
+// Sitios que pueden mostrar esta app dentro de un <iframe>, separados por espacios
+// (ej. "https://intranet.miempresa.com https://otro.com"). Vacío = nadie (solo el mismo origen).
+// X-Frame-Options no admite listas, por eso se usa CSP frame-ancestors, que es su sucesor.
+const FRAME_ANCESTORS = (process.env.FRAME_ANCESTORS ?? "").split(/\s+/).filter(Boolean);
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -14,7 +19,9 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
+          FRAME_ANCESTORS.length
+            ? { key: "Content-Security-Policy", value: `frame-ancestors 'self' ${FRAME_ANCESTORS.join(" ")}` }
+            : { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
         ],
