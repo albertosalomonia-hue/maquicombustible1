@@ -29,9 +29,17 @@ function crearCliente() {
   return new PrismaClient({ adapter });
 }
 
-// Singleton (también sobrevive al hot-reload en desarrollo).
+// Singleton (también sobrevive al hot-reload en desarrollo). Se crea en la primera consulta,
+// no al importar: `next build` carga los módulos del API sin DATABASE_URL.
 const globalForPrisma = globalThis;
-const prisma = globalForPrisma.__maquiPrisma ?? (globalForPrisma.__maquiPrisma = crearCliente());
+const obtenerCliente = () => globalForPrisma.__maquiPrisma ?? (globalForPrisma.__maquiPrisma = crearCliente());
+const prisma = new Proxy({}, {
+  get(_, clave) {
+    const cliente = obtenerCliente();
+    const valor = cliente[clave];
+    return typeof valor === 'function' ? valor.bind(cliente) : valor;
+  },
+});
 
 // ── Normalización de resultados ────────────────────────────────────────────────
 const pad = (n) => String(n).padStart(2, '0');
