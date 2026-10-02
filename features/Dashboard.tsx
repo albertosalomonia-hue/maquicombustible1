@@ -8,7 +8,7 @@ import EmptyState from '../components/ui/EmptyState'
 
 const gal = (n: number) => `${n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GLN`
 
-// Dashboard: solo medidores de fluido (javascript-fluid-meter) por almacén auxiliar. Para cada uno,
+// Dashboard: solo medidores de tanque cilíndrico por almacén auxiliar. Para cada uno,
 // el saldo de CONSUMO (disponible) y, al lado, el de RESERVA.
 export default function Dashboard() {
   const { data, isLoading } = useQuery({
