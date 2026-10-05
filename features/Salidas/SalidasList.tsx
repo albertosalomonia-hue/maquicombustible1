@@ -57,7 +57,7 @@ export default function SalidasList() {
       fecha: new Date().toISOString().slice(0, 10),
       motivo: '',
       solicitante: '',
-      tipo_salida: 'consumo',
+      tipo_salida: 'reserva', // CONSUMO en standby: por el momento solo se trabaja con RESERVA
       orden_salida_reserva: '',
       detalles: [] as any[], // { producto_id, cantidad, centro_costo_codigo, placa_id, es_diesel, horometro, fecha_abastecimiento, placa_vehiculo_id, factura_id, factura_label }
     },
@@ -424,6 +424,7 @@ export default function SalidasList() {
               fecha: new Date().toISOString().slice(0, 10),
               motivo: '',
               solicitante: '',
+              tipo_salida: 'reserva',
               detalles: [],
             })
             setModalOpen(true)
@@ -550,12 +551,14 @@ export default function SalidasList() {
             <div>
               <label className="label">Tipo de salida *</label>
               <div className="inline-flex w-full rounded-lg border border-slate-200 overflow-hidden text-sm font-semibold">
+                {/* Botón CONSUMO oculto (en standby): solo se trabaja con RESERVA.
                 <button type="button" onClick={() => cambiarTipoSalida('consumo')}
                   className={`flex-1 py-2 transition-colors ${!esReservaSal ? 'bg-green-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
                   CONSUMO
                 </button>
+                */}
                 <button type="button" onClick={() => cambiarTipoSalida('reserva')}
-                  className={`flex-1 py-2 border-l border-slate-200 transition-colors ${esReservaSal ? 'bg-red-600 text-white' : 'bg-white text-red-600 hover:bg-red-50'}`}>
+                  className={`flex-1 py-2 transition-colors ${esReservaSal ? 'bg-red-600 text-white' : 'bg-white text-red-600 hover:bg-red-50'}`}>
                   RESERVA
                 </button>
               </div>
