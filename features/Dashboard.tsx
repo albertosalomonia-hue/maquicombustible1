@@ -9,7 +9,7 @@ import EmptyState from '../components/ui/EmptyState'
 const gal = (n: number) => `${n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GLN`
 
 // Dashboard: solo medidores de tanque cilíndrico por almacén auxiliar. Para cada uno,
-// el saldo de CONSUMO (disponible) y, al lado, el de RESERVA.
+// el saldo de RESERVA (el de CONSUMO está oculto por el momento).
 export default function Dashboard() {
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-gauges'],
@@ -41,12 +41,14 @@ export default function Dashboard() {
                 <p className="text-xs font-semibold text-slate-300">GLN</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4">
+              {/* Medidor de CONSUMO oculto por el momento: solo se trabaja con RESERVAS.
               <div className="text-center">
                 <p className="mb-2 text-xs font-extrabold tracking-wide text-orange-400">CONSUMO</p>
                 <FluidGauge tipo="consumo" porcentaje={pct(a.consumo)} />
                 <p className="mt-2 text-sm font-bold text-orange-300">{gal(a.consumo)}</p>
               </div>
+              */}
               <div className="text-center">
                 <p className="mb-2 text-xs font-extrabold tracking-wide text-yellow-400">RESERVA</p>
                 <FluidGauge tipo="reserva" porcentaje={pct(a.reserva)} />
