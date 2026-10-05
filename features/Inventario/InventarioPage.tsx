@@ -1,8 +1,9 @@
 'use client'
 
 import React, { useState } from 'react'
-import { useQuery, keepPreviousData } from '@tanstack/react-query'
-import { Search, Boxes, ChevronDown, ChevronRight, AlertTriangle, Download } from 'lucide-react'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import { Search, Boxes, ChevronDown, ChevronRight, AlertTriangle, Download, RefreshCw } from 'lucide-react'
 import api from '../../services/api'
 import Badge from '../../components/ui/Badge'
 import { PageLoader } from '../../components/ui/Spinner'
@@ -10,11 +11,18 @@ import EmptyState from '../../components/ui/EmptyState'
 import SortableTh from '../../components/ui/SortableTh'
 import { useSortTable } from '../../hooks/useSortTable'
 import { useAuth } from '../../context/AuthContext'
+import { useConfirm } from '../../context/ConfirmContext'
 
 const fmt = (n: number) => `S/ ${parseFloat(String(n) || '0').toFixed(2)}`
 
+// Misma clave de confirmación usada en Salidas, Transferencias y Cierre de Período.
+const PASSWORD_CONFIRMACION = '@ayala.com'
+
 export default function InventarioPage() {
   const { almacenId, esSupervisor } = useAuth()
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const [recalculando, setRecalculando] = useState(false)
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [view, setView] = useState<'inventario' | 'resumen' | 'criticos'>('inventario')
@@ -44,6 +52,63 @@ export default function InventarioPage() {
     queryFn: () => api.get('/inventario/criticos').then(r => r.data),
     enabled: view === 'criticos',
   })
+
+  // Recalcula costos: primero SIMULA y muestra qué cambiaría; solo aplica si se confirma.
+  const recalcularCostos = async () => {
+    setRecalculando(true)
+    try {
+      const sim = await api.post('/inventario/recalcular-costos', { aplicar: false }).then(r => r.data)
+      const { correcciones = [], cambios = [], bloqueadas = [] } = sim
+      if (!correcciones.length && !cambios.length) {
+        toast.success(bloqueadas.length ? 'Solo hay correcciones en períodos cerrados: no se puede cambiar nada' : 'Los costos ya están al día')
+        return
+      }
+      const ok = await confirm({
+        title: 'Recalcular costos',
+        message: (
+          <div className="space-y-3 text-sm">
+            {correcciones.length > 0 && (
+              <div>
+                <p className="font-semibold">Precios de recepción a corregir ({correcciones.length}):</p>
+                <ul className="list-disc pl-5 max-h-32 overflow-y-auto">
+                  {correcciones.map((c: any, i: number) => (
+                    <li key={i}>{c.recepcion} · {c.factura || 's/factura'} · {c.sku}: S/ {c.precio_actual.toFixed(4)} → <strong>S/ {c.precio_nuevo.toFixed(4)}</strong> por unidad ({c.cantidad})</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {cambios.length > 0 && (
+              <div>
+                <p className="font-semibold">Costo promedio ({cambios.length}):</p>
+                <ul className="list-disc pl-5 max-h-40 overflow-y-auto">
+                  {cambios.slice(0, 30).map((c: any, i: number) => (
+                    <li key={i}>{c.sku} · {c.almacen}: S/ {c.costo_actual.toFixed(4)} → <strong>S/ {c.costo_nuevo.toFixed(4)}</strong> (valor {fmt(c.valor_actual)} → {fmt(c.valor_nuevo)})</li>
+                  ))}
+                </ul>
+                {cambios.length > 30 && <p className="text-slate-500">…y {cambios.length - 30} más.</p>}
+              </div>
+            )}
+            {bloqueadas.length > 0 && <p className="text-amber-700">{bloqueadas.length} corrección(es) en períodos cerrados no se aplicarán.</p>}
+          </div>
+        ),
+        variant: 'danger',
+        confirmLabel: 'Aplicar',
+        requiresPassword: true,
+        passwordLabel: 'Contraseña de confirmación',
+        validatePassword: (v: string) => v === PASSWORD_CONFIRMACION ? null : 'Contraseña incorrecta',
+      })
+      if (!ok) return
+      await api.post('/inventario/recalcular-costos', { aplicar: true })
+      toast.success('Costos recalculados')
+      qc.invalidateQueries({ queryKey: ['inventario-multi'] })
+      qc.invalidateQueries({ queryKey: ['inventario-resumen'] })
+      qc.invalidateQueries({ queryKey: ['kardex'] })
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Error al recalcular los costos')
+    } finally {
+      setRecalculando(false)
+    }
+  }
 
   const exportarExcel = async () => {
     const XLSX = await import('xlsx')
@@ -136,6 +201,12 @@ export default function InventarioPage() {
               <span className="text-slate-500">Valor total:</span>
               <span className="font-bold text-slate-900">{fmt(valorTotal)}</span>
             </div>
+            {esSupervisor && (
+              <button onClick={recalcularCostos} disabled={recalculando} className="btn-secondary flex items-center gap-2 text-sm shrink-0">
+                <RefreshCw size={15} className={recalculando ? 'animate-spin' : ''} />
+                Recalcular costos
+              </button>
+            )}
             <button onClick={exportarExcel} className="btn-secondary flex items-center gap-2 text-sm shrink-0">
               <Download size={15} />
               Exportar Excel

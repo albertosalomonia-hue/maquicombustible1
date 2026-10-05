@@ -1,6 +1,8 @@
 const router = require('../router').Router();
 const { pool } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
+const { getFechaLimiteCierre } = require('../services/cierrePeriodo');
+const { registrarAuditoria, getClientIP } = require('../middleware/audit');
 
 router.use(authMiddleware);
 
@@ -101,6 +103,123 @@ router.get('/resumen', async (req, res) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Error al obtener resumen' });
+  }
+});
+
+// POST /api/inventario/recalcular-costos  { aplicar?: boolean }
+// Recalcula el costo promedio de cada producto/almacén repitiendo el Kardex en orden (promedio
+// ponderado móvil: las entradas promedian con su costo, las salidas no lo cambian). Antes corrige
+// recepciones cuyo precio unitario es en realidad el total de la línea de la OC (precio × cantidad
+// mayor que el subtotal de una OC de una sola línea): el precio correcto es subtotal / cantidad.
+// Sin `aplicar` solo SIMULA (hace todo y deshace la transacción) y devuelve lo que cambiaría.
+// No toca recepciones de períodos cerrados.
+router.post('/recalcular-costos', async (req, res) => {
+  const { rol } = req.user;
+  if (rol !== 'admin' && rol !== 'gerente') {
+    return res.status(403).json({ error: 'Solo admin o gerente pueden recalcular costos' });
+  }
+  const aplicar = req.body?.aplicar === true;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const fechaLimite = await getFechaLimiteCierre(conn);
+
+    // 1) Recepciones con el total de la línea cargado como precio unitario.
+    const [candidatas] = await conn.query(
+      `SELECT rd.id, rd.recepcion_id, rd.producto_id, rd.cantidad_recibida, rd.precio_unitario,
+              r.numero, r.fecha, oc.nro_factura, oc.subtotal,
+              p.sku, p.descripcion,
+              (SELECT COUNT(*) FROM maquicombus_orden_compra_detalles x WHERE x.orden_compra_id = oc.id) AS lineas
+       FROM maquicombus_recepcion_detalles rd
+       JOIN maquicombus_recepciones r ON r.id = rd.recepcion_id
+       JOIN maquicombus_ordenes_compra oc ON oc.id = r.orden_compra_id
+       JOIN maquicombus_productos p ON p.id = rd.producto_id
+       WHERE r.estado <> 'anulada' AND rd.cantidad_recibida > 0 AND oc.subtotal > 0
+         AND rd.precio_unitario * rd.cantidad_recibida > oc.subtotal * 1.02`
+    );
+    const correcciones = [];
+    const bloqueadas = [];
+    for (const c of candidatas) {
+      if (Number(c.lineas) !== 1) continue; // con varias líneas no se puede deducir el precio
+      const nuevo = +(parseFloat(c.subtotal) / parseFloat(c.cantidad_recibida)).toFixed(4);
+      const item = {
+        recepcion: c.numero, factura: c.nro_factura, sku: c.sku, producto: c.descripcion,
+        cantidad: parseFloat(c.cantidad_recibida), precio_actual: parseFloat(c.precio_unitario), precio_nuevo: nuevo,
+      };
+      if (fechaLimite && String(c.fecha).slice(0, 10) <= String(fechaLimite).slice(0, 10)) { bloqueadas.push(item); continue; }
+      await conn.query('UPDATE maquicombus_recepcion_detalles SET precio_unitario = ? WHERE id = ?', [nuevo, c.id]);
+      await conn.query(
+        `UPDATE maquicombus_kardex SET costo_unitario = ?, valor_total = cantidad * ?
+         WHERE tipo_documento IN ('RECEPCION','COMPRA') AND referencia_id = ? AND producto_id = ?`,
+        [nuevo, nuevo, c.recepcion_id, c.producto_id]
+      );
+      await conn.query('UPDATE maquicombus_reservas SET costo_unitario = ? WHERE recepcion_detalle_id = ?', [nuevo, c.id]);
+      correcciones.push(item);
+    }
+
+    // 2) Repetir el Kardex y recalcular el costo promedio de cada producto/almacén.
+    const [movs] = await conn.query(
+      `SELECT producto_id, almacen_id, movimiento, cantidad, costo_unitario
+       FROM maquicombus_kardex
+       ORDER BY producto_id, almacen_id, fecha, (movimiento = 'entrada') DESC, (tipo_documento = 'SALDO_INICIAL') DESC, id`
+    );
+    const estado = new Map(); // "producto|almacen" -> { qty, avg }
+    for (const m of movs) {
+      const key = `${m.producto_id}|${m.almacen_id}`;
+      const s = estado.get(key) || { qty: 0, avg: 0 };
+      const cant = parseFloat(m.cantidad);
+      if (m.movimiento === 'entrada') {
+        const total = s.qty + cant;
+        if (total > 0) s.avg = ((s.qty * s.avg) + (cant * parseFloat(m.costo_unitario))) / total;
+        s.qty = total;
+      } else {
+        s.qty = Math.max(0, s.qty - cant);
+      }
+      estado.set(key, s);
+    }
+
+    const [invRows] = await conn.query(
+      `SELECT i.producto_id, i.almacen_id, i.stock_fisico, i.costo_promedio, p.sku, p.descripcion, a.nombre AS almacen
+       FROM maquicombus_inventario i
+       JOIN maquicombus_productos p ON p.id = i.producto_id
+       JOIN maquicombus_almacenes a ON a.id = i.almacen_id`
+    );
+    const cambios = [];
+    for (const r of invRows) {
+      const s = estado.get(`${r.producto_id}|${r.almacen_id}`);
+      if (!s) continue; // sin Kardex: no hay base para recalcular
+      const nuevo = +s.avg.toFixed(4);
+      const actual = parseFloat(r.costo_promedio);
+      if (Math.abs(nuevo - actual) <= 0.0001) continue;
+      const stock = parseFloat(r.stock_fisico);
+      cambios.push({
+        sku: r.sku, producto: r.descripcion, almacen: r.almacen, stock,
+        costo_actual: actual, costo_nuevo: nuevo, valor_actual: +(stock * actual).toFixed(2), valor_nuevo: +(stock * nuevo).toFixed(2),
+      });
+      await conn.query(
+        'UPDATE maquicombus_inventario SET costo_promedio = ? WHERE producto_id = ? AND almacen_id = ?',
+        [nuevo, r.producto_id, r.almacen_id]
+      );
+    }
+
+    if (aplicar) {
+      await conn.commit();
+      await registrarAuditoria({
+        usuarioId: req.user.id, usuarioNombre: req.user.nombre, ip: getClientIP(req),
+        modulo: 'inventario', accion: 'recalcular_costos', tabla: 'maquicombus_inventario', registroId: 0,
+        valorAnterior: { correcciones, cambios, bloqueadas },
+      });
+    } else {
+      await conn.rollback();
+    }
+    res.json({ aplicado: aplicar, correcciones, cambios, bloqueadas });
+  } catch (err) {
+    await conn.rollback();
+    console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Error al recalcular los costos' });
+  } finally {
+    conn.release();
   }
 });
 
