@@ -521,7 +521,7 @@ router.delete('/:id', async (req, res) => {
       if (salioDeReserva) {
         [[reservaOrigen]] = await conn.query(
           `SELECT id FROM maquicombus_reservas
-           WHERE almacen_id = ? AND producto_id = ? AND recepcion_detalle_id <=> ? AND nro_factura <=> ? AND transferencia_detalle_id <> ?
+           WHERE almacen_id = ? AND producto_id = ? AND recepcion_detalle_id <=> ? AND nro_factura <=> ? AND NOT (transferencia_detalle_id <=> ?)
            ORDER BY id LIMIT 1 FOR UPDATE`,
           [trf.almacen_origen_id, d.producto_id, d.recepcion_detalle_id || null, d.nro_factura || null, d.id]
         );
