@@ -20,7 +20,8 @@ export default function Dashboard() {
   if (isLoading) return <PageLoader />
 
   const almacenes: any[] = data?.almacenes || []
-  const escala: number = data?.escala || 1
+  // Escala por la mayor reserva (el consumo ya no se muestra, así que no entra en la escala).
+  const escala: number = Math.max(1, ...almacenes.map(a => a.reserva))
   const pct = (v: number) => Math.max(0, Math.min(100, (v / escala) * 100))
 
   if (!almacenes.length) return <EmptyState message="Sin almacenes auxiliares" description="Crea un almacén auxiliar para ver su medidor." />
@@ -35,9 +36,10 @@ export default function Dashboard() {
                 <h3 className="font-semibold text-white">{a.nombre}</h3>
                 <p className="text-xs text-slate-300">{a.codigo}</p>
               </div>
+              {/* Sin consumo, el "stock físico" mostrado es el de reserva. */}
               <div className="text-right">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Stock físico</p>
-                <p className="text-3xl font-black leading-tight text-white">{a.fisico.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                <p className="text-3xl font-black leading-tight text-white">{a.reserva.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                 <p className="text-xs font-semibold text-slate-300">GLN</p>
               </div>
             </div>
