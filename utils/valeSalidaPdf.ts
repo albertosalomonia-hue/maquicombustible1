@@ -47,7 +47,7 @@ export async function generarValeSalidaPDF(salida: any) {
   const infoY = 36
   doc.text(`Fecha: ${salida.fecha || ''}`, 14, infoY)
   doc.text(`Almacén: ${salida.almacen_nombre || ''}`, 14, infoY + 6)
-  doc.text(`Solicitante: ${salida.solicitante || '—'}`, 14, infoY + 12)
+  doc.text(`Centro de costos: ${salida.solicitante || '—'}`, 14, infoY + 12)
   doc.text(`Motivo: ${salida.motivo || '—'}`, 14, infoY + 18)
   if (salida.tipo_salida === 'reserva') {
     doc.text(`Tipo: RESERVA · Orden de salida de reserva: ${salida.orden_salida_reserva || '—'}`, 14, infoY + 24)

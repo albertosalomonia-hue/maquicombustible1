@@ -278,7 +278,7 @@ export default function SalidasList() {
         { header: 'N° Salida', key: 'numero', width: 16 },
         { header: 'Fecha', key: 'fecha', width: 12 },
         { header: 'Almacén', key: 'almacen', width: 22 },
-        { header: 'Solicitante', key: 'solicitante', width: 20 },
+        { header: 'Centro de Costos', key: 'solicitante', width: 20 },
         { header: 'Motivo', key: 'motivo', width: 24 },
         { header: 'SKU', key: 'sku', width: 18 },
         { header: 'Producto', key: 'producto', width: 36 },
@@ -401,7 +401,7 @@ export default function SalidasList() {
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className="input pl-9" placeholder="Buscar por número o solicitante..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input className="input pl-9" placeholder="Buscar por número o centro de costos..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <select className="select w-48" value={almacenF} onChange={e => setAlmacenF(e.target.value)}>
           <option value="">Todos los almacenes</option>
@@ -448,7 +448,7 @@ export default function SalidasList() {
                   <SortableTh col="numero" label="Número" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
                   <SortableTh col="fecha" label="Fecha" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
                   <SortableTh col="almacen_nombre" label="Almacén" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
-                  <SortableTh col="solicitante" label="Solicitante" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
+                  <SortableTh col="solicitante" label="Centro de Costos" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
                   <SortableTh col="motivo" label="Motivo" sortCol={sortCol} sortDir={sortDir} onSort={toggle} />
                   <th className="table-header text-left">Reversión</th>
                   <th className="table-header text-center">Vale / Detalle</th>
@@ -542,8 +542,8 @@ export default function SalidasList() {
               <input className="input" type="date" {...register('fecha', { required: true })} />
             </div>
             <div>
-              <label className="label">Solicitante</label>
-              <input className="input" {...register('solicitante')} placeholder="Nombre del solicitante" />
+              <label className="label">CENTRO DE COSTOS</label>
+              <input className="input" {...register('solicitante')} placeholder="Centro de costos" />
             </div>
           </div>
           {/* Tipo de salida: CONSUMO (proceso normal) o RESERVA (sale de una reserva ligada a factura) */}
@@ -1014,9 +1014,9 @@ export default function SalidasList() {
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div><span className="text-slate-400">Almacén:</span> <span className="font-medium">{detModal.almacen_nombre}</span></div>
               <div><span className="text-slate-400">Fecha:</span> <span className="font-medium">{detModal.fecha}</span></div>
-              <div><span className="text-slate-400">Solicitante:</span> <span className="font-medium">{detModal.solicitante || '—'}</span></div>
+              <div><span className="text-slate-400">Centro de costos:</span> <span className="font-medium">{detModal.solicitante || '—'}</span></div>
               {detModal.tipo_salida === 'reserva' && <div><span className="text-slate-400">Orden de salida de reserva:</span> <span className="font-medium">{detModal.orden_salida_reserva || '—'}</span></div>}
-              {detModal.motivo && <div><span className="text-slate-400">Motivo:</span> <span className="font-medium">{detModal.motivo}</span></div>}
+              <div><span className="text-slate-400">Motivo:</span> <span className="font-medium">{detModal.motivo || '—'}</span></div>
             </div>
             <div className="border border-slate-200 rounded-xl overflow-x-auto">
               <table className="w-full text-sm">
