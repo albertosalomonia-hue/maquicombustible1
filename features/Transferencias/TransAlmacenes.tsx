@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Warehouse, Plus, Trash2, KeyRound, ArrowRightLeft, Search } from 'lucide-react'
+import { Warehouse, Plus, Trash2, KeyRound, ArrowRightLeft, Search, Undo2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../services/api'
 import ProductoBuscador, { normalizar } from '../../components/ui/ProductoBuscador'
@@ -12,6 +12,9 @@ import { useConfirm } from '../../context/ConfirmContext'
 
 // reserva_id: línea que mueve stock RESERVADO de una factura concreta (cantidad parcial, el resto queda en origen).
 type Linea = { producto_id: string; cantidad: string; reserva_id?: string }
+
+// Misma clave de confirmación usada en Salidas, Transferencias y Cierre de Período.
+const PASSWORD_CONFIRMACION_REVERSION = '@ayala.com'
 
 export default function TransAlmacenes() {
   const qc = useQueryClient()
@@ -88,6 +91,39 @@ export default function TransAlmacenes() {
     queryKey: ['trans-almacenes-historial'],
     queryFn: () => api.get('/transferencias', { params: { search: 'TALM-', limit: 50 } }).then(r => r.data),
   })
+
+  // Revertir: el stock vuelve al almacén de origen (y la reserva, si salió de una reserva).
+  const revertMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/transferencias/${id}`, { data: { password: PASSWORD_CONFIRMACION_REVERSION } }).then(r => r.data),
+    onSuccess: () => {
+      toast.success('Transferencia revertida: el stock volvió al almacén de origen')
+      qc.invalidateQueries({ queryKey: ['transferencias'] })
+      qc.invalidateQueries({ queryKey: ['trans-almacenes-historial'] })
+      qc.invalidateQueries({ queryKey: ['inventario'] })
+      qc.invalidateQueries({ queryKey: ['inventario-trans-almacenes'] })
+      qc.invalidateQueries({ queryKey: ['reservas-trans-almacenes'] })
+      qc.invalidateQueries({ queryKey: ['reservas'] })
+      qc.invalidateQueries({ queryKey: ['kardex'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-gauges'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.error || 'Error al revertir la transferencia')
+    },
+  })
+
+  const handleRevertir = async (t: any) => {
+    const ok = await confirm({
+      title: 'Revertir transferencia',
+      message: <>¿Revertir <strong>{t.numero}</strong>? El stock saldrá de <strong>{t.destino_nombre}</strong> y volverá a <strong>{t.origen_nombre}</strong>, y se eliminarán sus movimientos del Kardex.</>,
+      variant: 'danger',
+      confirmLabel: 'Revertir',
+      requiresPassword: true,
+      passwordLabel: 'Contraseña de confirmación',
+      validatePassword: (v) => v === PASSWORD_CONFIRMACION_REVERSION ? null : 'Contraseña incorrecta',
+    })
+    if (!ok) return
+    revertMutation.mutate(t.id)
+  }
 
   const mutation = useMutation({
     mutationFn: (d: any) => api.post('/transferencias/entre-almacenes', d).then(r => r.data),
@@ -492,6 +528,7 @@ export default function TransAlmacenes() {
                   <th className="table-header text-left">Destino</th>
                   <th className="table-header text-center">Estado</th>
                   <th className="table-header text-left">Responsable</th>
+                  <th className="table-header text-center"></th>
                 </tr>
               </thead>
               <tbody>
@@ -504,6 +541,18 @@ export default function TransAlmacenes() {
                     <td className="table-cell text-slate-900">{t.destino_nombre}</td>
                     <td className="table-cell text-center text-xs text-slate-500">{t.estado}</td>
                     <td className="table-cell text-slate-500">{t.usuario_nombre || '—'}</td>
+                    <td className="table-cell text-center">
+                      {t.estado === 'completada' && (
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs py-1 px-2 text-red-600"
+                          disabled={revertMutation.isPending}
+                          onClick={() => handleRevertir(t)}
+                        >
+                          <Undo2 size={13} /> Revertir
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

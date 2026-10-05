@@ -2,6 +2,7 @@ const router = require('../router').Router();
 const { pool } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { assertPeriodoAbierto } = require('../services/cierrePeriodo');
+const { registrarAuditoria, getClientIP } = require('../middleware/audit');
 
 router.use(authMiddleware);
 
@@ -439,6 +440,129 @@ router.post('/entre-almacenes', async (req, res) => {
     await conn.rollback();
     console.error(err);
     res.status(err.status || 500).json({ error: err.status ? err.message : 'Error al registrar la transferencia entre almacenes' });
+  } finally {
+    conn.release();
+  }
+});
+
+// DELETE /api/transferencias/:id — revierte una transferencia completada (normal TRF-, entre
+// almacenes TALM- o de reserva): devuelve el stock al origen, lo quita del destino, elimina
+// sus líneas de Kardex y la reserva creada en el destino, y deja la transferencia 'anulada'.
+// Se bloquea si el destino ya consumió lo recibido (salidas contra esa reserva o stock
+// insuficiente), para no dejar saldos negativos.
+router.delete('/:id', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (req.body?.password !== PASSWORD_CONFIRMACION_TRANS_ALMACENES) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Contraseña de confirmación incorrecta' });
+    }
+
+    const [[trf]] = await conn.query('SELECT * FROM maquicombus_transferencias WHERE id = ? FOR UPDATE', [req.params.id]);
+    if (!trf) { await conn.rollback(); return res.status(404).json({ error: 'Transferencia no encontrada' }); }
+    if (trf.estado === 'anulada') { await conn.rollback(); return res.status(400).json({ error: 'La transferencia ya fue revertida' }); }
+    if (trf.estado !== 'completada') { await conn.rollback(); return res.status(400).json({ error: 'Solo se pueden revertir transferencias completadas' }); }
+    await assertPeriodoAbierto(conn, trf.fecha);
+
+    const { rol, almacen_id: userAlmacenId } = req.user;
+    const esPropioAlmacen = userAlmacenId && [trf.almacen_origen_id, trf.almacen_destino_id].some(a => String(a) === String(userAlmacenId));
+    if (rol !== 'admin' && rol !== 'gerente' && !esPropioAlmacen) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'No puedes revertir una transferencia de otros almacenes' });
+    }
+
+    const [detalles] = await conn.query('SELECT * FROM maquicombus_transferencia_detalles WHERE transferencia_id = ?', [trf.id]);
+    // Las transferencias TALM- no incrementan cantidad_transferida del lote de recepción.
+    const esTrfNormal = String(trf.numero).startsWith('TRF-');
+
+    for (const d of detalles) {
+      const cant = parseFloat(d.cantidad);
+
+      // Reserva creada en el destino por esta línea (si la hubo).
+      const [reservasDest] = await conn.query(
+        'SELECT * FROM maquicombus_reservas WHERE transferencia_detalle_id = ? FOR UPDATE', [d.id]
+      );
+      const esReservaLinea = reservasDest.length > 0;
+      for (const rv of reservasDest) {
+        if (parseFloat(rv.cantidad_salida) > 0.0001) {
+          await conn.rollback();
+          return res.status(400).json({ error: `No se puede revertir: la reserva de la factura ${rv.nro_factura || rv.id} ya tiene salidas (${parseFloat(rv.cantidad_salida)}). Revierta primero esas salidas.` });
+        }
+      }
+
+      const [[invDest]] = await conn.query(
+        'SELECT stock_fisico, stock_reservado FROM maquicombus_inventario WHERE producto_id = ? AND almacen_id = ? FOR UPDATE',
+        [d.producto_id, trf.almacen_destino_id]
+      );
+      const fisicoDest = invDest ? parseFloat(invDest.stock_fisico) : 0;
+      const reservadoDest = invDest ? parseFloat(invDest.stock_reservado) : 0;
+      const libreDest = esReservaLinea ? fisicoDest : fisicoDest - reservadoDest;
+      if (libreDest + 0.0001 < cant || (esReservaLinea && reservadoDest + 0.0001 < cant)) {
+        await conn.rollback();
+        return res.status(400).json({ error: `No se puede revertir: el almacén destino ya no tiene ${cant} del producto ID ${d.producto_id} disponibles` });
+      }
+
+      // Destino: quitar lo recibido (y su reserva).
+      await conn.query(
+        `UPDATE maquicombus_inventario SET stock_fisico = stock_fisico - ?${esReservaLinea ? ', stock_reservado = GREATEST(stock_reservado - ?, 0)' : ''} WHERE producto_id = ? AND almacen_id = ?`,
+        esReservaLinea ? [cant, cant, d.producto_id, trf.almacen_destino_id] : [cant, d.producto_id, trf.almacen_destino_id]
+      );
+      await conn.query('DELETE FROM maquicombus_reservas WHERE transferencia_detalle_id = ?', [d.id]);
+
+      // Origen: devolver el stock. Si salió de una reserva (TALM- de reserva), se restituye
+      // también el stock reservado y el saldo de la reserva de origen (misma factura/lote).
+      const [[outK]] = await conn.query(
+        "SELECT tipo_stock FROM maquicombus_kardex WHERE transferencia_detalle_id = ? AND tipo_documento = 'TRANSFERENCIA_OUT' LIMIT 1", [d.id]
+      );
+      const salioDeReserva = !esTrfNormal && outK?.tipo_stock === 'reserva';
+      let reservaOrigen = null;
+      if (salioDeReserva) {
+        [[reservaOrigen]] = await conn.query(
+          `SELECT id FROM maquicombus_reservas
+           WHERE almacen_id = ? AND producto_id = ? AND recepcion_detalle_id <=> ? AND nro_factura <=> ? AND transferencia_detalle_id <> ?
+           ORDER BY id LIMIT 1 FOR UPDATE`,
+          [trf.almacen_origen_id, d.producto_id, d.recepcion_detalle_id || null, d.nro_factura || null, d.id]
+        );
+        if (!reservaOrigen) {
+          await conn.rollback();
+          return res.status(400).json({ error: `No se encontró la reserva de origen (factura ${d.nro_factura || '—'}) para restituir el saldo` });
+        }
+        await conn.query('UPDATE maquicombus_reservas SET cantidad = cantidad + ? WHERE id = ?', [cant, reservaOrigen.id]);
+      }
+      await conn.query(
+        `UPDATE maquicombus_inventario SET stock_fisico = stock_fisico + ?${salioDeReserva ? ', stock_reservado = stock_reservado + ?' : ''} WHERE producto_id = ? AND almacen_id = ?`,
+        salioDeReserva ? [cant, cant, d.producto_id, trf.almacen_origen_id] : [cant, d.producto_id, trf.almacen_origen_id]
+      );
+
+      // Lote de recepción: vuelve a quedar pendiente de transferir.
+      if (esTrfNormal && d.recepcion_detalle_id) {
+        await conn.query(
+          'UPDATE maquicombus_recepcion_detalles SET cantidad_transferida = GREATEST(cantidad_transferida - ?, 0) WHERE id = ?',
+          [cant, d.recepcion_detalle_id]
+        );
+      }
+    }
+
+    await conn.query(
+      "DELETE FROM maquicombus_kardex WHERE referencia_id = ? AND tipo_documento IN ('TRANSFERENCIA_OUT','TRANSFERENCIA_IN')", [trf.id]
+    );
+    await conn.query("UPDATE maquicombus_transferencias SET estado = 'anulada' WHERE id = ?", [trf.id]);
+
+    await conn.commit();
+
+    await registrarAuditoria({
+      usuarioId: req.user.id, usuarioNombre: req.user.nombre, ip: getClientIP(req),
+      modulo: 'transferencias', accion: 'revertir', tabla: 'maquicombus_transferencias', registroId: trf.id,
+      valorAnterior: { transferencia: trf, detalles },
+    });
+
+    res.json({ message: 'Transferencia revertida: stock devuelto al almacén de origen' });
+  } catch (err) {
+    await conn.rollback();
+    console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Error al revertir la transferencia' });
   } finally {
     conn.release();
   }

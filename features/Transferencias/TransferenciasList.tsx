@@ -3,7 +3,8 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { consumeNavState } from '../../utils/navState'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Plus, Search, ArrowLeftRight, Trash2, ChevronDown, ChevronUp, FileText, FileDown } from 'lucide-react'
+import { Plus, Search, ArrowLeftRight, Trash2, ChevronDown, ChevronUp, FileText, FileDown, Undo2 } from 'lucide-react'
+import { useConfirm } from '../../context/ConfirmContext'
 import { useForm, useFieldArray } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import api from '../../services/api'
@@ -14,8 +15,12 @@ import EmptyState from '../../components/ui/EmptyState'
 import SortableTh from '../../components/ui/SortableTh'
 import { useSortTable } from '../../hooks/useSortTable'
 
+// Misma clave de confirmación usada en Salidas, Trans-Almacenes y Cierre de Período.
+const PASSWORD_CONFIRMACION_REVERSION = '@ayala.com'
+
 export default function TransferenciasList() {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [search, setSearch] = useState('')
   const [almacenFiltro, setAlmacenFiltro] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -168,6 +173,37 @@ export default function TransferenciasList() {
       toast.error(err?.response?.data?.error || 'Error al registrar la transferencia')
     },
   })
+
+  const revertMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/transferencias/${id}`, { data: { password: PASSWORD_CONFIRMACION_REVERSION } }).then(r => r.data),
+    onSuccess: () => {
+      toast.success('Transferencia revertida: stock devuelto al origen')
+      qc.invalidateQueries({ queryKey: ['transferencias'] })
+      qc.invalidateQueries({ queryKey: ['transferencia-detail'] })
+      qc.invalidateQueries({ queryKey: ['inventario'] })
+      qc.invalidateQueries({ queryKey: ['kardex'] })
+      qc.invalidateQueries({ queryKey: ['reservas'] })
+      qc.invalidateQueries({ queryKey: ['lotes-reserva'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-gauges'] })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.error || 'Error al revertir la transferencia')
+    },
+  })
+
+  const handleRevertir = async (t: any) => {
+    const ok = await confirm({
+      title: 'Revertir transferencia',
+      message: <>¿Revertir la transferencia <strong>{t.numero}</strong>? El stock volverá al almacén de origen, saldrá del destino y se eliminarán sus movimientos del Kardex.</>,
+      variant: 'danger',
+      confirmLabel: 'Revertir',
+      requiresPassword: true,
+      passwordLabel: 'Contraseña de confirmación',
+      validatePassword: (v) => v === PASSWORD_CONFIRMACION_REVERSION ? null : 'Contraseña incorrecta',
+    })
+    if (!ok) return
+    revertMutation.mutate(t.id)
+  }
 
   const transferencias = data?.data || []
   const { sorted, sortCol, sortDir, toggle } = useSortTable(transferencias, 'fecha', 'desc')
@@ -447,6 +483,18 @@ export default function TransferenciasList() {
                                     </tbody>
                                   </table>
                                 </div>
+                                {t.estado === 'completada' && (
+                                  <div className="flex justify-end pt-1">
+                                    <button
+                                      type="button"
+                                      className="btn-secondary text-xs py-1.5 text-red-600"
+                                      disabled={revertMutation.isPending}
+                                      onClick={(e) => { e.stopPropagation(); handleRevertir(t) }}
+                                    >
+                                      <Undo2 size={14} /> Revertir transferencia
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </td>
