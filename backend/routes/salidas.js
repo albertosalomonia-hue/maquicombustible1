@@ -414,9 +414,10 @@ router.delete('/:id', async (req, res) => {
     if (sal.anulada) { await conn.rollback(); return res.status(400).json({ error: 'La salida ya fue revertida' }); }
     await assertPeriodoAbierto(conn, sal.fecha);
 
-    const { rol, almacen_id: userAlmacenId } = req.user;
+    const { rol, almacen_id: userAlmacenId, almacen_tipo: userAlmacenTipo } = req.user;
+    const esPrincipal = !userAlmacenId || userAlmacenTipo === 'central';
     const esPropioAlmacen = userAlmacenId && String(userAlmacenId) === String(sal.almacen_id);
-    if (rol !== 'admin' && rol !== 'gerente' && !esPropioAlmacen) {
+    if (rol !== 'admin' && rol !== 'gerente' && !esPrincipal && !esPropioAlmacen) {
       await conn.rollback();
       return res.status(403).json({ error: 'No puedes revertir una salida de otro almacén' });
     }
@@ -490,9 +491,10 @@ router.post('/:id/anular-reversion', async (req, res) => {
     if (!sal.anulada) { await conn.rollback(); return res.status(400).json({ error: 'La salida no está revertida' }); }
     await assertPeriodoAbierto(conn, sal.fecha);
 
-    const { rol, almacen_id: userAlmacenId } = req.user;
+    const { rol, almacen_id: userAlmacenId, almacen_tipo: userAlmacenTipo } = req.user;
+    const esPrincipal = !userAlmacenId || userAlmacenTipo === 'central';
     const esPropioAlmacen = userAlmacenId && String(userAlmacenId) === String(sal.almacen_id);
-    if (rol !== 'admin' && rol !== 'gerente' && !esPropioAlmacen) {
+    if (rol !== 'admin' && rol !== 'gerente' && !esPrincipal && !esPropioAlmacen) {
       await conn.rollback();
       return res.status(403).json({ error: 'No puedes anular la reversión de una salida de otro almacén' });
     }

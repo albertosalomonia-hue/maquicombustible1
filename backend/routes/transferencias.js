@@ -466,9 +466,10 @@ router.delete('/:id', async (req, res) => {
     if (trf.estado !== 'completada') { await conn.rollback(); return res.status(400).json({ error: 'Solo se pueden revertir transferencias completadas' }); }
     await assertPeriodoAbierto(conn, trf.fecha);
 
-    const { rol, almacen_id: userAlmacenId } = req.user;
+    const { rol, almacen_id: userAlmacenId, almacen_tipo: userAlmacenTipo } = req.user;
+    const esPrincipal = !userAlmacenId || userAlmacenTipo === 'central';
     const esPropioAlmacen = userAlmacenId && [trf.almacen_origen_id, trf.almacen_destino_id].some(a => String(a) === String(userAlmacenId));
-    if (rol !== 'admin' && rol !== 'gerente' && !esPropioAlmacen) {
+    if (rol !== 'admin' && rol !== 'gerente' && !esPrincipal && !esPropioAlmacen) {
       await conn.rollback();
       return res.status(403).json({ error: 'No puedes revertir una transferencia de otros almacenes' });
     }
