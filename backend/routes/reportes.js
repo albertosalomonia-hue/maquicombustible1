@@ -126,6 +126,126 @@ router.post('/conteo-almacenes', async (req, res) => {
   }
 });
 
+// GET /api/reportes/facturas-vs-stock
+// Por cada factura de RESERVA recibida (un lote = una línea de recepción): lo recibido, sus
+// movimientos (transferencias entre almacenes y salidas de reserva) y cuánto queda. Las
+// transferencias solo mueven el stock de un almacén a otro (no cambian el total); las salidas lo
+// descuentan. Se omiten las transferencias anuladas y las salidas revertidas. El "queda" de
+// cada movimiento es el total que queda de esa factura después de él; `ubicacion` reparte lo que
+// queda por almacén.
+router.get('/facturas-vs-stock', async (req, res) => {
+  try {
+    const [lotes] = await pool.query(
+      `SELECT rd.id, rd.cantidad_recibida, rd.precio_unitario,
+              r.numero AS recepcion, r.fecha AS fecha_recepcion, a.nombre AS almacen_recepcion,
+              oc.numero AS oc_numero, oc.nro_factura,
+              p.sku, p.descripcion AS producto, um.codigo AS unidad
+       FROM maquicombus_recepcion_detalles rd
+       JOIN maquicombus_recepciones r ON r.id = rd.recepcion_id
+       JOIN maquicombus_ordenes_compra oc ON oc.id = r.orden_compra_id
+       JOIN maquicombus_productos p ON p.id = rd.producto_id
+       JOIN maquicombus_almacenes a ON a.id = r.almacen_destino_id
+       LEFT JOIN maquicombus_unidades_medida um ON um.id = p.unidad_medida_id
+       WHERE oc.es_reserva = 1 AND r.estado <> 'anulada'
+       ORDER BY r.fecha DESC, rd.id DESC`
+    );
+
+    const [transfs] = await pool.query(
+      `SELECT td.recepcion_detalle_id AS lote_id, t.id, t.numero, t.fecha,
+              ao.nombre AS origen, ad.nombre AS destino, td.cantidad
+       FROM maquicombus_transferencia_detalles td
+       JOIN maquicombus_transferencias t ON t.id = td.transferencia_id
+       JOIN maquicombus_almacenes ao ON ao.id = t.almacen_origen_id
+       JOIN maquicombus_almacenes ad ON ad.id = t.almacen_destino_id
+       WHERE td.recepcion_detalle_id IS NOT NULL AND t.estado = 'completada'`
+    );
+
+    const [salidas] = await pool.query(
+      `SELECT rv.recepcion_detalle_id AS lote_id, s.id, s.numero, s.fecha, s.solicitante,
+              a.nombre AS almacen, sd.cantidad, cc.nombre AS centro_costo
+       FROM maquicombus_salida_detalles sd
+       JOIN maquicombus_salidas s ON s.id = sd.salida_id
+       JOIN maquicombus_reservas rv ON rv.id = sd.reserva_id
+       JOIN maquicombus_almacenes a ON a.id = s.almacen_id
+       LEFT JOIN maquicombus_centros_costo cc ON cc.id = sd.centro_costo_id
+       WHERE sd.reserva_id IS NOT NULL AND s.anulada = 0`
+    );
+
+    const porLote = (lista) => {
+      const m = new Map();
+      for (const x of lista) { if (!m.has(x.lote_id)) m.set(x.lote_id, []); m.get(x.lote_id).push(x); }
+      return m;
+    };
+    const transPorLote = porLote(transfs);
+    const salPorLote = porLote(salidas);
+    const f4 = (n) => Math.round(n * 10000) / 10000;
+
+    const data = lotes.map(l => {
+      const recibido = parseFloat(l.cantidad_recibida);
+      const movs = [
+        ...(transPorLote.get(l.id) || []).map(t => ({
+          tipo: 'transferencia', orden: 1, id: t.id, numero: t.numero, fecha: t.fecha,
+          detalle: `${t.origen} → ${t.destino}`, origen: t.origen, destino: t.destino, cantidad: parseFloat(t.cantidad),
+        })),
+        ...(salPorLote.get(l.id) || []).map(s => ({
+          tipo: 'salida', orden: 2, id: s.id, numero: s.numero, fecha: s.fecha,
+          detalle: `Sale de ${s.almacen}`, almacen: s.almacen, centro_costo: s.centro_costo || s.solicitante || null, cantidad: parseFloat(s.cantidad),
+        })),
+      ].sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || a.orden - b.orden || a.id - b.id);
+
+      // Recorre los movimientos: el total solo baja con las salidas; cada almacén sube/baja según el movimiento.
+      const ubic = new Map([[l.almacen_recepcion, recibido]]);
+      let queda = recibido;
+      let salido = 0, transferido = 0;
+      for (const m of movs) {
+        if (m.tipo === 'transferencia') {
+          ubic.set(m.origen, (ubic.get(m.origen) || 0) - m.cantidad);
+          ubic.set(m.destino, (ubic.get(m.destino) || 0) + m.cantidad);
+          transferido += m.cantidad;
+        } else {
+          ubic.set(m.almacen, (ubic.get(m.almacen) || 0) - m.cantidad);
+          queda -= m.cantidad;
+          salido += m.cantidad;
+        }
+        m.queda = f4(queda);
+        m.cantidad = f4(m.cantidad);
+        delete m.orden; delete m.origen; delete m.destino; delete m.almacen;
+      }
+
+      return {
+        id: l.id,
+        factura: l.nro_factura || null,
+        oc: l.oc_numero,
+        recepcion: l.recepcion,
+        fecha_recepcion: l.fecha_recepcion,
+        almacen_recepcion: l.almacen_recepcion,
+        sku: l.sku, producto: l.producto, unidad: l.unidad,
+        precio_unitario: parseFloat(l.precio_unitario),
+        recibido: f4(recibido),
+        transferido: f4(transferido),
+        salido: f4(salido),
+        queda: f4(queda),
+        ubicacion: [...ubic.entries()].filter(([, c]) => Math.abs(c) > 0.00005).map(([almacen, cantidad]) => ({ almacen, cantidad: f4(cantidad) })),
+        movimientos: movs,
+      };
+    });
+
+    res.json({
+      data,
+      resumen: {
+        facturas: data.length,
+        recibido: f4(data.reduce((s, d) => s + d.recibido, 0)),
+        salido: f4(data.reduce((s, d) => s + d.salido, 0)),
+        queda: f4(data.reduce((s, d) => s + d.queda, 0)),
+        con_saldo: data.filter(d => d.queda > 0.00005).length,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al generar reporte: ' + err.message });
+  }
+});
+
 // GET /api/reportes/reversiones-salidas
 // Listado de las salidas que fueron revertidas. Revertir una salida la borra físicamente
 // (ver DELETE /api/salidas/:id), así que la única foto de lo que existió queda en

@@ -69,6 +69,7 @@ const MODULOS_POR_GRUPO: { grupo: string; items: { value: string; label: string 
     { value: 'reportes/detalle-ordenes-compra', label: 'Detalle OC' },
     { value: 'reportes/reversiones-salidas', label: 'Reversiones de Salidas' },
     { value: 'reportes/salidas-por-familia', label: 'Reporte por Familias' },
+    { value: 'reportes/facturas-vs-stock', label: 'Facturas vs Stock' },
   ] },
 ]
 

@@ -85,6 +85,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         { to: '/reportes/detalle-ordenes-compra', icon: <ShoppingCartIcon size={18} />,    label: 'Detalle OC' },
         { to: '/reportes/reversiones-salidas',    icon: <Undo2 size={18} />,               label: 'Reversiones de Salidas' },
         { to: '/reportes/salidas-por-familia',    icon: <LayoutGrid size={18} />,          label: 'Reporte por Familias' },
+        { to: '/reportes/facturas-vs-stock',      icon: <Scale size={18} />,               label: 'Facturas vs Stock' },
       ],
     },
   ]
