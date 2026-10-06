@@ -80,6 +80,26 @@ Archivos: `backend/routes/reportes.js`, `features/Reportes/FacturasVsStockPage.t
 - Regla: `queda = recibido − salidas`; las transferencias solo mueven stock entre almacenes.
 - Verificado contra la base: 12 facturas, recibido 302.001, salidas 117, queda 185.001 (coincide con el saldo de `maquicombus_reservas` y con el stock reservado por almacén).
 
+## 4c. Permiso de reversión — usuarios principales
+
+Archivos: `backend/routes/salidas.js`, `backend/routes/transferencias.js`
+
+- Error corregido: "No puedes revertir una salida de otro almacén".
+- Antes solo podían revertir admin, gerente o el usuario cuyo almacén asignado era el de la salida/transferencia.
+- Ahora también pueden los **usuarios principales**: sin almacén asignado o del almacén de tipo `central` (mismo criterio `esPrincipal` del frontend).
+- Aplica a: revertir una salida, anular la reversión de una salida y revertir una transferencia (cuentan origen y destino).
+- Quien tenga un almacén auxiliar asignado sigue limitado a su propio almacén. El rol y el almacén viajan en el token de sesión (8 h): hay que volver a iniciar sesión.
+
+## 4d. Órdenes de compra — proveedor SERVICENTRO PIZARRO SAC
+
+Archivo: `backend/config/proveedoresPermitidos.js`
+
+- Se agregó el RUC **20427140467** (SERVICENTRO PIZARRO S.A.C.) a `RUCS_PERMITIDOS`. Esa lista filtra el listado de órdenes y también decide qué proveedores y órdenes trae la sincronización con el sistema anterior (solo del año `ANIO_OC` = 2026).
+- En el sistema anterior el proveedor existe (id 721, activo) y tiene **5 órdenes de compra de 2026**.
+- Las órdenes no se leen en vivo: aparecen tras desplegar y pulsar **Actualizar** en Órdenes de compra (`POST /ordenes-compra/sincronizar`).
+- El botón Actualizar solo funciona para admin, gerente, usuarios sin almacén asignado o del almacén central (`requirePrincipalAccess`).
+- **Pendiente:** confirmar que aparecen las 5 órdenes tras desplegar y sincronizar.
+
 ## 5. Hallazgos de datos (sin cambios aplicados)
 
 - **LAR, producto 11:** el consumo de 5 GLN venía de `SI-2025-00001` (+37) menos las salidas SAL-2026-00002 (−31) y SAL-2026-00001 (−1). Esas salidas ya se revirtieron: consumo 37, reserva 250.001, físico 287.001.
