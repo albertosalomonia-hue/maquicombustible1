@@ -469,7 +469,7 @@ export default function OrdenesCompraList() {
         </select>
         <button
           onClick={handleSoloRecepcionarChange}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all duration-150 ${
+          className={`hidden items-center gap-2 px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all duration-150 ${
             soloRecepcionar
               ? 'bg-emerald-500 border-emerald-500 text-white shadow-md shadow-emerald-200'
               : 'bg-white border-emerald-400 text-emerald-600 hover:bg-emerald-50'
@@ -497,7 +497,7 @@ export default function OrdenesCompraList() {
         <button
           onClick={() => sincronizarCentrosM.mutate()}
           disabled={sincronizarCentrosM.isPending}
-          className="btn-secondary"
+          className="btn-secondary hidden"
           title="Llenar el centro de costo vacío de las líneas de compra con el centro de costo más reciente de sus salidas"
         >
           <Wallet size={16} className={sincronizarCentrosM.isPending ? 'animate-spin' : ''} />
@@ -508,7 +508,7 @@ export default function OrdenesCompraList() {
         </button>
         <button
           onClick={handleSoloSinRecepcionarChange}
-          className={`hidden inline-flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all duration-150 ${
+          className={`hidden items-center gap-2 px-4 py-2 text-sm font-bold rounded-xl border-2 transition-all duration-150 ${
             soloSinRecepcionar
               ? 'bg-orange-500 border-orange-500 text-white shadow-md shadow-orange-200'
               : 'bg-white border-orange-400 text-orange-600 hover:bg-orange-50'
