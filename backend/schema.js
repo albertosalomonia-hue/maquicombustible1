@@ -868,6 +868,18 @@ async function initSchema(conn) {
   }
   if (faltantes.length) console.log(`✅ ${faltantes.length} facturas de recepciones faltantes creadas`);
 
+  // Reservas creadas antes de que su orden tuviera N° de factura quedaron con nro_factura
+  // vacío: se completa desde la orden de compra de su recepción.
+  await conn.query(`
+    UPDATE maquicombus_reservas rv
+    JOIN maquicombus_recepcion_detalles rd ON rv.recepcion_detalle_id = rd.id
+    JOIN maquicombus_recepciones rc ON rd.recepcion_id = rc.id
+    JOIN maquicombus_ordenes_compra oc ON rc.orden_compra_id = oc.id
+    SET rv.nro_factura = oc.nro_factura
+    WHERE (rv.nro_factura IS NULL OR rv.nro_factura = '')
+      AND oc.nro_factura IS NOT NULL AND oc.nro_factura != ''
+  `);
+
   // Conteo físico de almacenes: una fila por producto/almacén con el último conteo
   // registrado (se sobrescribe en cada guardado, como erp_inventario con el stock).
   await conn.query(`
