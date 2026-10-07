@@ -20,9 +20,11 @@ export default function FacturasList() {
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
 
+  const [empresaId, setEmpresaId] = useState('')
+
   const { data, isLoading } = useQuery({
-    queryKey: ['facturas', search],
-    queryFn: () => api.get('/facturas', { params: { search, limit: 100, incluir_anuladas: 1, incluir_reserva: 1 } }).then(r => r.data),
+    queryKey: ['facturas', search, empresaId],
+    queryFn: () => api.get('/facturas', { params: { search, cliente_id: empresaId || undefined, limit: 5000, incluir_anuladas: 1, incluir_reserva: 1 } }).then(r => r.data),
     placeholderData: keepPreviousData,
   })
   const { data: clientes } = useQuery({ queryKey: ['clientes-sel'], queryFn: () => api.get('/clientes', { params: { limit: 500 } }).then(r => r.data.data) })
@@ -210,6 +212,10 @@ export default function FacturasList() {
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input className="input pl-9" placeholder="Buscar por número, RUC o proveedor..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
+        <select className="select sm:w-64" value={empresaId} onChange={e => setEmpresaId(e.target.value)}>
+          <option value="">Todas las empresas</option>
+          {(clientes || []).map((c: any) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
+        </select>
         <button className="btn-secondary" onClick={exportarExcel} disabled={!sorted.length}><Download size={16} /> Exportar Excel</button>
         <button className="btn-primary" onClick={() => { reset(); setModalOpen(true) }}><Plus size={16} /> Registrar Factura</button>
       </div>

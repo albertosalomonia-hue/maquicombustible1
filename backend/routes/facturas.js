@@ -63,6 +63,7 @@ router.get('/', async (req, res) => {
     if (req.query.incluir_reserva !== '1') {
       where += ' AND NOT EXISTS (SELECT 1 FROM maquicombus_ordenes_compra ores WHERE ores.id = f.orden_compra_id AND ores.es_reserva = 1)';
     }
+    if (req.query.cliente_id) { where += ' AND f.cliente_id = ?'; params.push(req.query.cliente_id); }
     if (estado) { where += ' AND f.estado = ?'; params.push(estado); }
     else if (!incluir_anuladas) { where += " AND f.estado != 'anulada'"; }
     if (producto_id) {

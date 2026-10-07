@@ -837,6 +837,37 @@ async function initSchema(conn) {
     console.log('✅ Columnas de anulación/retorno agregadas a erp_facturas');
   }
 
+  // Migración: la unicidad de la factura pasa de (serie, numero) a (serie, numero, cliente_id).
+  // Empresas distintas pueden emitir el mismo F001-123; con la clave anterior el INSERT IGNORE
+  // que hace la recepción descartaba en silencio la factura de la segunda empresa y no
+  // aparecía en el listado. Luego se crean las facturas que quedaron faltando.
+  const [idxFacturaViejo] = await conn.query(
+    "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'maquicombus_facturas' AND INDEX_NAME = 'uk_serie_num' AND COLUMN_NAME = 'numero' AND SEQ_IN_INDEX = 2 AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS s2 WHERE s2.TABLE_SCHEMA = DATABASE() AND s2.TABLE_NAME = 'maquicombus_facturas' AND s2.INDEX_NAME = 'uk_serie_num' AND s2.COLUMN_NAME = 'cliente_id')"
+  );
+  if (idxFacturaViejo.length) {
+    await conn.query("ALTER TABLE maquicombus_facturas DROP INDEX uk_serie_num, ADD UNIQUE KEY uk_serie_num (serie, numero, cliente_id)");
+    console.log('✅ Unicidad de facturas ahora es serie + número + empresa');
+  }
+  const [faltantes] = await conn.query(`
+    SELECT oc.id, oc.cliente_id, oc.nro_factura, oc.subtotal, oc.igv, oc.total,
+           (SELECT MIN(r.fecha) FROM maquicombus_recepciones r WHERE r.orden_compra_id = oc.id) AS fecha
+    FROM maquicombus_ordenes_compra oc
+    WHERE oc.nro_factura IS NOT NULL AND oc.nro_factura != ''
+      AND EXISTS (SELECT 1 FROM maquicombus_recepciones r WHERE r.orden_compra_id = oc.id)
+      AND NOT EXISTS (SELECT 1 FROM maquicombus_facturas f WHERE f.orden_compra_id = oc.id)
+  `);
+  for (const oc of faltantes) {
+    const dashIdx = oc.nro_factura.indexOf('-');
+    const serie = dashIdx > -1 ? oc.nro_factura.substring(0, dashIdx).trim() : 'F001';
+    const numero = dashIdx > -1 ? oc.nro_factura.substring(dashIdx + 1).trim() : oc.nro_factura.trim();
+    await conn.query(
+      `INSERT IGNORE INTO maquicombus_facturas (serie, numero, fecha, cliente_id, orden_compra_id, subtotal, igv, total, tipo, estado)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'factura', 'registrada')`,
+      [serie, numero, oc.fecha, oc.cliente_id, oc.id, oc.subtotal || 0, oc.igv || 0, oc.total || 0]
+    );
+  }
+  if (faltantes.length) console.log(`✅ ${faltantes.length} facturas de recepciones faltantes creadas`);
+
   // Conteo físico de almacenes: una fila por producto/almacén con el último conteo
   // registrado (se sobrescribe en cada guardado, como erp_inventario con el stock).
   await conn.query(`
