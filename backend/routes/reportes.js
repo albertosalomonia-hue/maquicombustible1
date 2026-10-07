@@ -7,7 +7,7 @@ router.use(authMiddleware);
 // Ocultas temporalmente del reporte de Saldos de Inventario a pedido del usuario
 // (2026-09): categorías que todavía no se van a usar. Quitar este filtro cuando
 // corresponda volver a mostrarlas.
-const CATEGORIAS_OCULTAS_SALDOS = ['COMBUSTIBLES', 'AGREGADOS', 'ACTIVO', 'MOBILIARIO', 'EQUIPO ELECTRONICO'];
+const CATEGORIAS_OCULTAS_SALDOS = ['AGREGADOS', 'ACTIVO', 'MOBILIARIO', 'EQUIPO ELECTRONICO'];
 
 // GET /api/reportes/saldos-inventario
 // Listado del saldo actual (real, en vivo) de cada producto por almacén — excluye las
