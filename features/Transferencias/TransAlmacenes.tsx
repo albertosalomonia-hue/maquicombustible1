@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Warehouse, Plus, Trash2, KeyRound, ArrowRightLeft, Search, Undo2 } from 'lucide-react'
+import { Warehouse, Plus, Trash2, KeyRound, ArrowRightLeft, Search, Undo2, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../services/api'
 import ProductoBuscador, { normalizar } from '../../components/ui/ProductoBuscador'
@@ -82,6 +82,24 @@ export default function TransAlmacenes() {
     : productosOrigenInfo
 
   useEffect(() => { setDispSearch('') }, [almacenOrigenId])
+
+  // Recarga stock de origen/destino, reservas (números de factura) e historial.
+  const [refrescando, setRefrescando] = useState(false)
+  const refrescar = async () => {
+    setRefrescando(true)
+    try {
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['inventario-trans-almacenes'] }),
+        qc.refetchQueries({ queryKey: ['reservas-trans-almacenes'] }),
+        qc.refetchQueries({ queryKey: ['trans-almacenes-historial'] }),
+      ])
+      toast.success('Datos actualizados')
+    } catch {
+      toast.error('No se pudo actualizar')
+    } finally {
+      setRefrescando(false)
+    }
+  }
 
   const agregarProductoOrigen = (id: number) => {
     setLineas(prev => [...prev, { producto_id: String(id), cantidad: '1' }])
@@ -240,6 +258,9 @@ export default function TransAlmacenes() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <label className="font-medium text-slate-900 text-sm">Productos a Transferir</label>
+              <button type="button" onClick={refrescar} disabled={refrescando} className="btn-secondary text-xs py-1.5 ml-auto mr-2" title="Recargar stock y números de factura">
+                <RefreshCw size={14} className={refrescando ? 'animate-spin' : ''} /> Actualizar
+              </button>
               {/* Botón "Agregar" oculto: los productos se agregan con el "+" de los paneles de stock. */}
               <button type="button" onClick={agregarLinea} className="btn-secondary text-xs py-1.5 hidden">
                 <Plus size={14} /> Agregar
