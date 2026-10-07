@@ -113,3 +113,39 @@ Archivo: `backend/config/proveedoresPermitidos.js`
 - "Stock en inventario de 250 en LAR": tras revertir TALM-2026-00001 a 00003 la reserva de LAR volvió a 250.001.
 - Decidir si la casilla "Centro de costos" de Salidas pasa a ser un selector en lugar de texto libre.
 - Decidir si el Kardex debe mostrar el motivo de las salidas.
+
+---
+
+# Sesión 2026-10-07 — Facturas, Saldos de Inventario y Trans-Almacenes
+
+## 7. Facturas: empresas faltantes en el listado
+
+Archivos: `backend/schema.js`, `backend/routes/facturas.js`, `features/Facturas/FacturasList.tsx`
+
+- **Causa 1:** el listado pedía `limit: 100` y solo mostraba las 100 más recientes. Ahora pide hasta 5000.
+- **Causa 2:** la clave única era `(serie, numero)`. Dos empresas con el mismo F001-123 chocaban y el `INSERT IGNORE` de la recepción descartaba en silencio la factura de la segunda. Ahora la clave es `(serie, numero, cliente_id)`.
+- Migración: crea las facturas de órdenes con `nro_factura` y recepción que no tenían factura.
+- Nuevo filtro **"Todas las empresas"** en el listado (parámetro `cliente_id` en `GET /facturas`).
+
+## 8. Reporte Saldos de Inventario vacío
+
+Archivo: `backend/routes/reportes.js`
+
+- **Causa:** el único producto con stock (DIESEL, familia `COMBUSTIBLES`) estaba en `CATEGORIAS_OCULTAS_SALDOS` (ocultas temporalmente desde 2026-09).
+- Se quitó `COMBUSTIBLES` de esa lista. Siguen ocultas: AGREGADOS, ACTIVO, MOBILIARIO, EQUIPO ELECTRONICO. Para revertir, volver a agregarla.
+
+## 9. Trans-Almacenes: botón Actualizar y N° de factura de reservas
+
+Archivos: `features/Transferencias/TransAlmacenes.tsx`, `backend/routes/reservas.js`, `backend/schema.js`
+
+- Botón **Actualizar** (cabecera de "Productos a Transferir"): recarga stock de origen/destino, reservas e historial.
+- **Causa de "Sin factura":** `maquicombus_reservas.nro_factura` se copia de la OC al recepcionar. Si la OC recibió su factura después, la reserva quedó con el campo vacío (ej. reserva 56, OC 0000-02855 → F003-00015938).
+- `GET /reservas` ahora usa `COALESCE(reserva.nro_factura, oc.nro_factura)` vía recepción → OC.
+- Migración: completa `nro_factura` vacío de las reservas desde su OC.
+- La reserva 54 (OC 0000-02846) sigue sin número porque esa OC no tiene factura asignada.
+
+## 10. Cómo aplicar (IMPORTANTE)
+
+- Las migraciones de `backend/schema.js` **no corren al iniciar la app**: solo con `npm run db:init` (escribe en la base de `.env.local`).
+- Reiniciar `next dev` para que el backend tome los cambios en `backend/routes/*.js`.
+- Orden: reiniciar `next dev` → `npm run db:init` → pulsar **Actualizar** en Trans-Almacenes.
