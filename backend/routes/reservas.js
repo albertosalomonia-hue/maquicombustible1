@@ -18,9 +18,13 @@ router.get('/', async (req, res) => {
     const [rows] = await pool.query(
       `SELECT rv.id, rv.transferencia_id, COALESCE(t.numero, 'ENTRADA') AS transferencia_numero, rv.producto_id,
               p.sku, p.descripcion AS producto_descripcion, rv.almacen_id, a.nombre AS almacen_nombre,
-              rv.nro_factura, rv.fecha, rv.cantidad, rv.cantidad_salida,
+              COALESCE(NULLIF(rv.nro_factura, ''), NULLIF(oc.nro_factura, '')) AS nro_factura,
+              rv.fecha, rv.cantidad, rv.cantidad_salida,
               (rv.cantidad - rv.cantidad_salida) AS saldo, rv.costo_unitario
        FROM maquicombus_reservas rv
+       LEFT JOIN maquicombus_recepcion_detalles rd ON rv.recepcion_detalle_id = rd.id
+       LEFT JOIN maquicombus_recepciones rc ON rd.recepcion_id = rc.id
+       LEFT JOIN maquicombus_ordenes_compra oc ON rc.orden_compra_id = oc.id
        LEFT JOIN maquicombus_transferencias t ON rv.transferencia_id = t.id
        JOIN maquicombus_productos p ON rv.producto_id = p.id
        JOIN maquicombus_almacenes a ON rv.almacen_id = a.id
