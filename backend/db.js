@@ -26,7 +26,8 @@ function crearCliente() {
     // Serverless: por defecto el pool de mariadb mantiene `connectionLimit` conexiones abiertas
     // (minimumIdle) durante 30 min (idleTimeout=1800 s). Con varias instancias de Vercel eso agota
     // max_connections del MySQL ("Too many connections"). Se liberan las inactivas a los pocos segundos.
-    minimumIdle: 0,
+    // OJO: minimumIdle NO puede ser 0 (el pool de mariadb deja de conectar y todo da 500); mínimo 1.
+    minimumIdle: 1,
     idleTimeout: Number(process.env.DB_IDLE_TIMEOUT) || 10,
     connectTimeout: 30_000,
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
