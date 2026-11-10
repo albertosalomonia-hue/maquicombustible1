@@ -11,6 +11,7 @@ import { PageLoader } from '../../components/ui/Spinner'
 import EmptyState from '../../components/ui/EmptyState'
 import { useAuth } from '../../context/AuthContext'
 import KardexIndexado from './KardexIndexado'
+import KardexCuadre from './KardexCuadre'
 
 const n2 = (n: any) => parseFloat(String(n) || '0').toFixed(2)
 const n4 = (n: any) => parseFloat(String(n) || '0').toFixed(4)
@@ -351,6 +352,8 @@ export default function KardexPage() {
         </button>
       )}
       </div>
+
+      <KardexCuadre params={{ ...params, producto_id: filters.producto_id, search }} />
 
       {vista === 'indexado' && <KardexIndexado params={{ ...params, producto_id: filters.producto_id, search }} />}
 
