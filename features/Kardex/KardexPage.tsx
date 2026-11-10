@@ -87,23 +87,31 @@ export default function KardexPage() {
 
   const recalcularMutation = useMutation({
     mutationFn: async (producto_id?: string) => {
-      let r = (await api.post('/kardex/recalcular-costos', producto_id ? { producto_id } : {})).data
-      // Sin producto corre en segundo plano en el servidor: se consulta hasta que termine.
-      while (r.estado === 'en_proceso') {
-        await new Promise(res => setTimeout(res, 3000))
-        r = (await api.get('/kardex/recalcular-costos/estado')).data
+      // El servidor es serverless (tiempo máximo por petición): se recalcula por lotes de
+      // productos. El primer lote también copia a las entradas el precio vigente de su OC.
+      const ids: number[] = producto_id
+        ? [Number(producto_id)]
+        : (await api.get('/kardex/recalcular-costos/productos')).data
+      const total = { pares: 0, lineas: 0, inventarios: 0, entradasReprecidas: 0, inventarioDescuadrado: [] as any[] }
+      const LOTE = 15
+      for (let i = 0; i < Math.max(ids.length, 1); i += LOTE) {
+        const r = (await api.post('/kardex/recalcular-costos', { producto_ids: ids.slice(i, i + LOTE), propagar_precios: i === 0 })).data
+        total.pares += r.pares; total.lineas += r.lineas; total.inventarios += r.inventarios
+        total.entradasReprecidas += r.entradasReprecidas || 0
+        total.inventarioDescuadrado.push(...(r.inventarioDescuadrado || []))
+        if (!producto_id) toast.loading(`Recalculando... ${Math.min(i + LOTE, ids.length)}/${ids.length} productos`, { id: 'recalc' })
       }
-      if (r.estado === 'error') throw new Error(r.error || 'Error al recalcular')
-      return r
+      toast.dismiss('recalc')
+      return total
     },
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ['kardex'] })
       qc.invalidateQueries({ queryKey: ['kardex-indexado'] })
       qc.invalidateQueries({ queryKey: ['inventario-multi'] })
-      toast.success(`Recalculado: ${r.lineas} líneas corregidas en ${r.pares} producto/almacén`)
+      toast.success(`Recalculado: ${r.entradasReprecidas} entradas con precio actualizado, ${r.lineas} líneas corregidas en ${r.pares} producto/almacén`)
       if (r.inventarioDescuadrado?.length) toast(`${r.inventarioDescuadrado.length} producto/almacén no cuadran con el stock físico (costo de inventario sin tocar)`, { icon: '⚠️' })
     },
-    onError: (err: any) => toast.error(err?.response?.data?.error || err?.message || 'Error al recalcular'),
+    onError: (err: any) => { toast.dismiss('recalc'); toast.error(err?.response?.data?.error || err?.message || 'Error al recalcular') },
   })
   const handleRecalcular = () => {
     const prod = (catalogo || []).find((p: any) => String(p.id) === filters.producto_id)

@@ -497,21 +497,28 @@ async function sincronizarOrdenesCompraLegacy(db) {
 // propaga el precio vigente de la OC a las entradas ya registradas. Se ejecuta en cada
 // sync (independiente de si la línea de OC cambió en esta corrida) y solo toca lo que
 // difiere. Las líneas de OC del mismo producto dentro de una orden se promedian ponderadas
-// por cantidad pedida, igual que al agrupar en la recepción. No toca entradas de períodos
+// por cantidad pedida, igual que al agrupar en la recepción. El precio efectivo es precio_unitario, salvo
+// que no cuadre con el subtotal (en algunas OC del sistema anterior trae el total de la línea):
+// ahí se usa subtotal / cantidad y
+// solo se usan líneas sincronizadas del sistema anterior (sin descuento) cuya cantidad pedida
+// coincide con la recibida; si no, no se toca (evita corromper entradas con otra base de cantidad). No toca entradas de períodos
 // ya cerrados (cierre_periodo_id).
 // Nota: el saldo del Kardex se recalcula al mostrarse (valor acumulado), así que basta
 // con corregir costo_unitario y valor_total de la entrada.
 async function propagarPreciosARecepciones(db) {
   const PRECIO_VIGENTE = `(
     SELECT orden_compra_id, producto_id,
-           SUM(cantidad_pedida * precio_unitario) / NULLIF(SUM(cantidad_pedida), 0) AS p
+           SUM(CASE WHEN subtotal > 0 AND ABS(subtotal - cantidad_pedida * precio_unitario) > 0.01 * subtotal THEN subtotal ELSE cantidad_pedida * precio_unitario END) / NULLIF(SUM(cantidad_pedida), 0) AS p,
+           SUM(cantidad_pedida) AS q
     FROM maquicombus_orden_compra_detalles
+    WHERE id_detalle_origen IS NOT NULL
     GROUP BY orden_compra_id, producto_id
   ) np`;
   const JOIN_REC = `
     JOIN maquicombus_recepciones r ON r.id = rd.recepcion_id AND r.estado <> 'anulada'
     JOIN maquicombus_orden_compra_detalles od0 ON od0.id = rd.orden_detalle_id
-    JOIN ${PRECIO_VIGENTE} ON np.orden_compra_id = od0.orden_compra_id AND np.producto_id = rd.producto_id`;
+    JOIN ${PRECIO_VIGENTE} ON np.orden_compra_id = od0.orden_compra_id AND np.producto_id = rd.producto_id
+      AND ABS(np.q - rd.cantidad_recibida) < 0.005`;
 
   const FILTRO_KARDEX = `
     WHERE k.tipo_documento IN ('RECEPCION','SALDO_INICIAL') AND k.movimiento = 'entrada'
@@ -635,4 +642,4 @@ async function sincronizarCentrosCostoDesdeSalidas(db) {
   return result.changedRows || 0;
 }
 
-module.exports = { sincronizarOrdenesCompraLegacy, crearFacturasFaltantes, sincronizarCentrosCostoDesdeSalidas, UM_MAP };
+module.exports = { sincronizarOrdenesCompraLegacy, propagarPreciosARecepciones, crearFacturasFaltantes, sincronizarCentrosCostoDesdeSalidas, UM_MAP };

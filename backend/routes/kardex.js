@@ -2,6 +2,7 @@ const router = require('../router').Router();
 const { pool } = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const { recalcularCostosKardex } = require('../services/recalculoCostos');
+const { propagarPreciosARecepciones } = require('../services/syncOrdenesCompraLegacy');
 const { assertPeriodoAbierto } = require('../services/cierrePeriodo');
 
 router.use(authMiddleware);
@@ -188,34 +189,40 @@ router.get('/indexado', async (req, res) => {
 // POST /api/kardex/recalcular-costos  { producto_id? }
 // Reproduce el historial de cada producto/almacén y corrige costos de salidas,
 // transferencias, saldos corridos y costo promedio de inventario (ver services/recalculoCostos.js).
-// Con producto_id responde al terminar; sin él (todos los productos) corre en segundo plano
-// y el avance se consulta en GET /recalcular-costos/estado (evita el 504 del proxy).
-let recalcEstado = { estado: 'inactivo' };
-
+// Body: { producto_ids?: number[], producto_id?: number, propagar_precios?: boolean }
+//  - propagar_precios: antes de recalcular, copia a las entradas (recepciones/Kardex/reservas) el
+//    precio vigente de su orden de compra (lo mismo que hace "Actualizar" en Órdenes de Compra).
+//  - Se llama por lotes de productos (el cliente itera): el backend corre en serverless y una
+//    sola petición con todos los productos excede el tiempo máximo (504).
 router.post('/recalcular-costos', requireRole('admin'), async (req, res) => {
   try {
-    const { producto_id } = req.body || {};
-    if (recalcEstado.estado === 'en_proceso') return res.status(202).json(recalcEstado);
-    const [pares] = await pool.query(
-      `SELECT DISTINCT producto_id, almacen_id FROM maquicombus_kardex ${producto_id ? 'WHERE producto_id = ?' : ''}`,
-      producto_id ? [producto_id] : []
-    );
-    const lista = pares.map(p => [p.producto_id, p.almacen_id]);
-    if (producto_id) {
-      return res.json({ estado: 'listo', ...(await recalcularCostosKardex(pool, lista)) });
+    const { producto_id, producto_ids, propagar_precios } = req.body || {};
+    let entradasReprecidas = 0;
+    if (propagar_precios) entradasReprecidas = await propagarPreciosARecepciones(pool);
+    const ids = (producto_ids || (producto_id ? [producto_id] : [])).map(Number).filter(Boolean);
+    let resumen = { pares: 0, lineas: 0, inventarios: 0, inventarioDescuadrado: [] };
+    if (ids.length) {
+      const [pares] = await pool.query(
+        `SELECT DISTINCT producto_id, almacen_id FROM maquicombus_kardex WHERE producto_id IN (?)`, [ids]
+      );
+      resumen = await recalcularCostosKardex(pool, pares.map(p => [p.producto_id, p.almacen_id]));
     }
-    recalcEstado = { estado: 'en_proceso', inicio: Date.now(), total: lista.length };
-    recalcularCostosKardex(pool, lista)
-      .then(r => { recalcEstado = { estado: 'listo', ...r }; })
-      .catch(err => { console.error('[kardex/recalcular-costos]', err); recalcEstado = { estado: 'error', error: err.message }; });
-    res.status(202).json(recalcEstado);
+    res.json({ ...resumen, entradasReprecidas });
   } catch (err) {
     console.error('[kardex/recalcular-costos]', err);
     res.status(500).json({ error: 'Error al recalcular costos del Kardex' });
   }
 });
 
-router.get('/recalcular-costos/estado', requireRole('admin'), (req, res) => res.json(recalcEstado));
+// Productos con movimientos en el Kardex (para que el cliente recalcule por lotes).
+router.get('/recalcular-costos/productos', requireRole('admin'), async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT DISTINCT producto_id FROM maquicombus_kardex ORDER BY producto_id');
+    res.json(rows.map(r => r.producto_id));
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar productos' });
+  }
+});
 
 // GET /api/erp_kardex/producto/:id/almacen/:almacenId - erp_kardex de un producto en un almacén
 router.get('/producto/:id/almacen/:almacenId', async (req, res) => {
