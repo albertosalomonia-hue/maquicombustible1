@@ -86,7 +86,16 @@ export default function KardexPage() {
   })
 
   const recalcularMutation = useMutation({
-    mutationFn: (producto_id?: string) => api.post('/kardex/recalcular-costos', producto_id ? { producto_id } : {}).then(r => r.data),
+    mutationFn: async (producto_id?: string) => {
+      let r = (await api.post('/kardex/recalcular-costos', producto_id ? { producto_id } : {})).data
+      // Sin producto corre en segundo plano en el servidor: se consulta hasta que termine.
+      while (r.estado === 'en_proceso') {
+        await new Promise(res => setTimeout(res, 3000))
+        r = (await api.get('/kardex/recalcular-costos/estado')).data
+      }
+      if (r.estado === 'error') throw new Error(r.error || 'Error al recalcular')
+      return r
+    },
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ['kardex'] })
       qc.invalidateQueries({ queryKey: ['kardex-indexado'] })
@@ -94,7 +103,7 @@ export default function KardexPage() {
       toast.success(`Recalculado: ${r.lineas} líneas corregidas en ${r.pares} producto/almacén`)
       if (r.inventarioDescuadrado?.length) toast(`${r.inventarioDescuadrado.length} producto/almacén no cuadran con el stock físico (costo de inventario sin tocar)`, { icon: '⚠️' })
     },
-    onError: (err: any) => toast.error(err?.response?.data?.error || 'Error al recalcular'),
+    onError: (err: any) => toast.error(err?.response?.data?.error || err?.message || 'Error al recalcular'),
   })
   const handleRecalcular = () => {
     const prod = (catalogo || []).find((p: any) => String(p.id) === filters.producto_id)

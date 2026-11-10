@@ -23,11 +23,13 @@ async function recalcularPar(conn, productoId, almacenId, cola, resumen) {
             k.saldo_cantidad, k.saldo_valor, k.saldo_costo_unitario,
             k.referencia_id, k.transferencia_detalle_id, k.cierre_periodo_id,
             rd.precio_unitario AS lote_costo,
-            (SELECT rv.costo_unitario
-               FROM maquicombus_salida_detalles sd
-               JOIN maquicombus_reservas rv ON rv.id = sd.reserva_id
-              WHERE sd.salida_id = k.referencia_id AND sd.producto_id = k.producto_id
-                AND sd.cantidad = k.cantidad AND sd.reserva_id IS NOT NULL LIMIT 1) AS reserva_costo
+            CASE WHEN k.tipo_documento = 'SALIDA_RESERVA' THEN
+              (SELECT rv.costo_unitario
+                 FROM maquicombus_salida_detalles sd
+                 JOIN maquicombus_reservas rv ON rv.id = sd.reserva_id
+                WHERE sd.salida_id = k.referencia_id AND sd.producto_id = k.producto_id
+                  AND sd.cantidad = k.cantidad AND sd.reserva_id IS NOT NULL LIMIT 1)
+            END AS reserva_costo
      FROM maquicombus_kardex k
      LEFT JOIN maquicombus_transferencia_detalles td ON td.id = k.transferencia_detalle_id
      LEFT JOIN maquicombus_recepcion_detalles rd ON rd.id = td.recepcion_detalle_id

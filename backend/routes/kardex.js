@@ -188,20 +188,34 @@ router.get('/indexado', async (req, res) => {
 // POST /api/kardex/recalcular-costos  { producto_id? }
 // Reproduce el historial de cada producto/almacén y corrige costos de salidas,
 // transferencias, saldos corridos y costo promedio de inventario (ver services/recalculoCostos.js).
+// Con producto_id responde al terminar; sin él (todos los productos) corre en segundo plano
+// y el avance se consulta en GET /recalcular-costos/estado (evita el 504 del proxy).
+let recalcEstado = { estado: 'inactivo' };
+
 router.post('/recalcular-costos', requireRole('admin'), async (req, res) => {
   try {
     const { producto_id } = req.body || {};
+    if (recalcEstado.estado === 'en_proceso') return res.status(202).json(recalcEstado);
     const [pares] = await pool.query(
       `SELECT DISTINCT producto_id, almacen_id FROM maquicombus_kardex ${producto_id ? 'WHERE producto_id = ?' : ''}`,
       producto_id ? [producto_id] : []
     );
-    const resumen = await recalcularCostosKardex(pool, pares.map(p => [p.producto_id, p.almacen_id]));
-    res.json(resumen);
+    const lista = pares.map(p => [p.producto_id, p.almacen_id]);
+    if (producto_id) {
+      return res.json({ estado: 'listo', ...(await recalcularCostosKardex(pool, lista)) });
+    }
+    recalcEstado = { estado: 'en_proceso', inicio: Date.now(), total: lista.length };
+    recalcularCostosKardex(pool, lista)
+      .then(r => { recalcEstado = { estado: 'listo', ...r }; })
+      .catch(err => { console.error('[kardex/recalcular-costos]', err); recalcEstado = { estado: 'error', error: err.message }; });
+    res.status(202).json(recalcEstado);
   } catch (err) {
     console.error('[kardex/recalcular-costos]', err);
     res.status(500).json({ error: 'Error al recalcular costos del Kardex' });
   }
 });
+
+router.get('/recalcular-costos/estado', requireRole('admin'), (req, res) => res.json(recalcEstado));
 
 // GET /api/erp_kardex/producto/:id/almacen/:almacenId - erp_kardex de un producto en un almacén
 router.get('/producto/:id/almacen/:almacenId', async (req, res) => {
