@@ -193,6 +193,60 @@ router.get('/indexado', async (req, res) => {
   }
 });
 
+// GET /api/kardex/cuadre - verificación del Kardex en el rango filtrado:
+//   Saldo inicial + Entradas − Inventario final = Salidas
+// Saldo inicial / inventario final = último saldo registrado (columna saldo_*) de cada producto-almacén
+// antes del rango / al final del rango, de modo que la igualdad sirve para detectar descuadres.
+router.get('/cuadre', async (req, res) => {
+  try {
+    const { search, producto_id, almacen_id, centro_costo_id, fecha_desde, fecha_hasta } = req.query;
+    if (centro_costo_id) return res.json({ aplica: false });
+    let where = `WHERE COALESCE(NULLIF(p.familia,''), '') NOT IN (${CATEGORIAS_OCULTAS_KARDEX.map(() => '?').join(',')})
+                 AND k.producto_id NOT IN (${PRODUCTOS_OCULTOS_KARDEX.map(() => '?').join(',')})`;
+    const base = [...CATEGORIAS_OCULTAS_KARDEX, ...PRODUCTOS_OCULTOS_KARDEX];
+    if (search) { where += ' AND (p.sku LIKE ? OR p.descripcion LIKE ?)'; base.push(`%${search}%`, `%${search}%`); }
+    if (producto_id) { where += ' AND k.producto_id = ?'; base.push(producto_id); }
+    if (almacen_id) { where += ' AND k.almacen_id = ?'; base.push(almacen_id); }
+
+    const ultimoSaldo = async (cond, extra) => {
+      const [[r]] = await pool.query(
+        `SELECT COALESCE(SUM(t.saldo_cantidad), 0) AS cant, COALESCE(SUM(t.saldo_valor), 0) AS valor FROM (
+           SELECT k.saldo_cantidad, k.saldo_valor,
+                  ROW_NUMBER() OVER (PARTITION BY k.producto_id, k.almacen_id
+                    ORDER BY k.fecha DESC, (k.movimiento = 'entrada') ASC, (k.tipo_documento = 'SALDO_INICIAL') ASC, k.id DESC) AS rn
+           FROM maquicombus_kardex k JOIN maquicombus_productos p ON k.producto_id = p.id
+           ${where} AND ${cond}) t WHERE t.rn = 1`, [...base, ...extra]);
+      return { cantidad: parseFloat(r.cant), valor: parseFloat(r.valor) };
+    };
+    const inicial = fecha_desde ? await ultimoSaldo('k.fecha < ?', [fecha_desde]) : { cantidad: 0, valor: 0 };
+    const final = fecha_hasta ? await ultimoSaldo('k.fecha <= ?', [fecha_hasta]) : await ultimoSaldo('1 = 1', []);
+
+    let w = where; const p = [...base];
+    if (fecha_desde) { w += ' AND k.fecha >= ?'; p.push(fecha_desde); }
+    if (fecha_hasta) { w += ' AND k.fecha <= ?'; p.push(fecha_hasta); }
+    const [[m]] = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.cantidad END), 0) AS ent_c,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.valor_total END), 0) AS ent_v,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.cantidad END), 0) AS sal_c,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.valor_total END), 0) AS sal_v
+       FROM maquicombus_kardex k JOIN maquicombus_productos p ON k.producto_id = p.id ${w}`, p);
+    const entradas = { cantidad: parseFloat(m.ent_c), valor: parseFloat(m.ent_v) };
+    const salidas = { cantidad: parseFloat(m.sal_c), valor: parseFloat(m.sal_v) };
+    const esperadasC = inicial.cantidad + entradas.cantidad - final.cantidad;
+    const esperadasV = inicial.valor + entradas.valor - final.valor;
+    const difC = esperadasC - salidas.cantidad, difV = esperadasV - salidas.valor;
+    res.json({
+      aplica: true, inicial, entradas, final, salidas,
+      salidas_calculadas: { cantidad: esperadasC, valor: esperadasV },
+      diferencia: { cantidad: difC, valor: difV },
+      cuadra: Math.abs(difC) < 0.005 && Math.abs(difV) < 0.05,
+    });
+  } catch (err) {
+    console.error('[kardex/cuadre]', err);
+    res.status(500).json({ error: 'Error al calcular el cuadre del Kardex' });
+  }
+});
+
 // POST /api/kardex/recalcular-costos  { producto_id? }
 // Reproduce el historial de cada producto/almacén y corrige costos de salidas,
 // transferencias, saldos corridos y costo promedio de inventario (ver services/recalculoCostos.js).
