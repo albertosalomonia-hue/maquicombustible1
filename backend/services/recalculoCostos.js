@@ -4,10 +4,12 @@
 // Reglas de costeo (las mismas con las que se registran los movimientos):
 //  - Entradas (RECEPCION, SALDO_INICIAL, AJUSTE_POS): conservan su costo. Las
 //    TRANSFERENCIA_IN toman el costo de su TRANSFERENCIA_OUT (se propaga entre almacenes).
-//  - TRANSFERENCIA_OUT ligada a un lote de recepción: costo del lote (precio de la recepción).
-//  - SALIDA_RESERVA: costo de la reserva de donde sale.
-//  - Resto de salidas (consumo, ajuste negativo, transferencia sin lote): costo promedio
-//    ponderado corrido.
+//  - Salidas (consumo, reserva, ajuste negativo) y transferencias individuales: se registran al
+//    costo PROMEDIO ponderado del inventario en ese momento (aunque la transferencia/reserva
+//    arrastre un lote solo como trazabilidad) → se reproduce el promedio corrido.
+//  - Transferencia POR BLOQUE: sale a costo del lote de recepción (FIFO). Se detecta porque su
+//    costo guardado coincide con el precio del lote (actual, o uno anterior si el precio del
+//    lote se acaba de corregir: opts.preciosPrevios = Map(recepcion_detalle_id → [precios])).
 //  - Líneas "Saldo Inicial" de cierre de período (cierre_periodo_id): son el arrastre del
 //    saldo del mes anterior, no un movimiento; no suman al saldo corrido y se reajustan al
 //    saldo recalculado justo antes de su fecha.
@@ -17,19 +19,12 @@
 const EPS = 0.00005;
 const dif = (a, b) => Math.abs(parseFloat(a) - parseFloat(b)) > EPS;
 
-async function recalcularPar(conn, productoId, almacenId, cola, resumen) {
+async function recalcularPar(conn, productoId, almacenId, cola, resumen, preciosPrevios) {
   const [rows] = await conn.query(
     `SELECT k.id, k.fecha, k.tipo_documento, k.movimiento, k.cantidad, k.costo_unitario, k.valor_total,
             k.saldo_cantidad, k.saldo_valor, k.saldo_costo_unitario,
             k.referencia_id, k.transferencia_detalle_id, k.cierre_periodo_id,
-            rd.precio_unitario AS lote_costo,
-            CASE WHEN k.tipo_documento = 'SALIDA_RESERVA' THEN
-              (SELECT rv.costo_unitario
-                 FROM maquicombus_salida_detalles sd
-                 JOIN maquicombus_reservas rv ON rv.id = sd.reserva_id
-                WHERE sd.salida_id = k.referencia_id AND sd.producto_id = k.producto_id
-                  AND sd.cantidad = k.cantidad AND sd.reserva_id IS NOT NULL LIMIT 1)
-            END AS reserva_costo
+            rd.id AS lote_id, rd.precio_unitario AS lote_costo
      FROM maquicombus_kardex k
      LEFT JOIN maquicombus_transferencia_detalles td ON td.id = k.transferencia_detalle_id
      LEFT JOIN maquicombus_recepcion_detalles rd ON rd.id = td.recepcion_detalle_id
@@ -61,8 +56,10 @@ async function recalcularPar(conn, productoId, almacenId, cola, resumen) {
       costo = parseFloat(r.costo_unitario);
       qty += cant; val += cant * costo;
     } else {
-      if (r.tipo_documento === 'TRANSFERENCIA_OUT' && r.lote_costo != null) costo = parseFloat(r.lote_costo);
-      else if (r.tipo_documento === 'SALIDA_RESERVA' && r.reserva_costo != null) costo = parseFloat(r.reserva_costo);
+      const previos = (r.lote_id != null && preciosPrevios.get(Number(r.lote_id))) || [];
+      const esPorLote = r.tipo_documento === 'TRANSFERENCIA_OUT' && r.lote_costo != null &&
+        (!dif(r.costo_unitario, r.lote_costo) || previos.some(pr => !dif(r.costo_unitario, pr)));
+      if (esPorLote) costo = parseFloat(r.lote_costo);
       else costo = qty > EPS ? val / qty : ultimoCosto;
       qty -= cant; val -= cant * costo;
     }
@@ -121,7 +118,8 @@ async function recalcularPar(conn, productoId, almacenId, cola, resumen) {
 }
 
 // pares: [[producto_id, almacen_id], ...]
-async function recalcularCostosKardex(db, pares) {
+async function recalcularCostosKardex(db, pares, opts = {}) {
+  const preciosPrevios = opts.preciosPrevios || new Map();
   const resumen = { pares: 0, lineas: 0, inventarios: 0, inventarioDescuadrado: [] };
   if (!pares.length) return resumen;
   const conn = await db.getConnection();
@@ -135,7 +133,7 @@ async function recalcularCostosKardex(db, pares) {
       const veces = hechos.get(clave) || 0;
       if (veces >= 3) continue;
       hechos.set(clave, veces + 1);
-      await recalcularPar(conn, p, a, cola, resumen);
+      await recalcularPar(conn, p, a, cola, resumen, preciosPrevios);
     }
     resumen.pares = hechos.size;
     await conn.commit();

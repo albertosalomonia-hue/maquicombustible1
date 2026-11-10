@@ -532,6 +532,15 @@ async function propagarPreciosARecepciones(db) {
     ${JOIN_REC}
     ${FILTRO_KARDEX}
   `);
+  // Precios anteriores de los lotes que cambian (para reconocer transferencias por bloque).
+  const [lotesCambian] = await db.query(`
+    SELECT rd.id, rd.precio_unitario AS previo
+    FROM maquicombus_recepcion_detalles rd
+    ${JOIN_REC}
+    WHERE np.p IS NOT NULL AND ABS(rd.precio_unitario - np.p) > 0.00005
+  `);
+  const preciosPrevios = new Map();
+  for (const l of lotesCambian) preciosPrevios.set(Number(l.id), [parseFloat(l.previo)]);
   const [kRes] = await db.query(`
     UPDATE maquicombus_kardex k
     JOIN maquicombus_recepcion_detalles rd ON k.referencia_id = rd.recepcion_id AND k.producto_id = rd.producto_id
@@ -554,7 +563,7 @@ async function propagarPreciosARecepciones(db) {
   `);
   // Salidas, transferencias, saldos corridos e inventario dependen del costo de esas entradas.
   if (afectados.length) {
-    const r = await recalcularCostosKardex(db, afectados.map(a => [a.producto_id, a.almacen_id]));
+    const r = await recalcularCostosKardex(db, afectados.map(a => [a.producto_id, a.almacen_id]), { preciosPrevios });
     if (r.inventarioDescuadrado.length) console.warn('[sync OC] Kardex vs stock físico no cuadra:', JSON.stringify(r.inventarioDescuadrado));
   }
   return kRes.changedRows || 0;
