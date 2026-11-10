@@ -22,7 +22,12 @@ function crearCliente() {
     password: decodeURIComponent(url.password),
     database: decodeURIComponent(url.pathname.slice(1)),
     // En Vercel cada instancia abre su propio pool: mantenerlo pequeño.
-    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT) || 5,
+    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT) || 3,
+    // Serverless: por defecto el pool de mariadb mantiene `connectionLimit` conexiones abiertas
+    // (minimumIdle) durante 30 min (idleTimeout=1800 s). Con varias instancias de Vercel eso agota
+    // max_connections del MySQL ("Too many connections"). Se liberan las inactivas a los pocos segundos.
+    minimumIdle: 0,
+    idleTimeout: Number(process.env.DB_IDLE_TIMEOUT) || 10,
     connectTimeout: 30_000,
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   });
