@@ -24,11 +24,15 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
   const filas: any[] = data?.data || []
 
   const tot = filas.reduce((a, f) => ({
+    iniC: a.iniC + parseFloat(f.inicial_cantidad || 0),
+    entC: a.entC + parseFloat(f.entrada_cantidad || 0),
+    salC: a.salC + parseFloat(f.salida_cantidad || 0),
+    saldoC: a.saldoC + parseFloat(f.saldo_cantidad || 0),
     ini: a.ini + parseFloat(f.inicial_valor || 0),
     ent: a.ent + parseFloat(f.entrada_valor || 0),
     sal: a.sal + parseFloat(f.salida_valor || 0),
     saldo: a.saldo + parseFloat(f.saldo_valor || 0),
-  }), { ini: 0, ent: 0, sal: 0, saldo: 0 })
+  }), { iniC: 0, entC: 0, salC: 0, saldoC: 0, ini: 0, ent: 0, sal: 0, saldo: 0 })
 
   const handleExport = async () => {
     if (!filas.length) { toast.error('No hay datos para exportar'); return }
@@ -77,9 +81,10 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
         ;[6, 7, 9, 10, 12, 13, 15, 16].forEach(c => { row.getCell(c).numFmt = '"S/ "#,##0.00' })
         ;[5, 8, 11, 14].forEach(c => { row.getCell(c).numFmt = '#,##0.00' })
       })
-      const t = ws.addRow(['', '', '', 'TOTALES', '', '', tot.ini, '', '', tot.ent, '', '', tot.sal, '', '', tot.saldo])
+      const t = ws.addRow(['', '', '', 'TOTALES', tot.iniC, '', tot.ini, tot.entC, '', tot.ent, tot.salC, '', tot.sal, tot.saldoC, '', tot.saldo])
       t.font = { bold: true }
       ;[7, 10, 13, 16].forEach(c => { t.getCell(c).numFmt = '"S/ "#,##0.00' })
+      ;[5, 8, 11, 14].forEach(c => { t.getCell(c).numFmt = '#,##0.00' })
       ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 16 } }
 
       const buffer = await wb.xlsx.writeBuffer()
@@ -177,13 +182,18 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
             </tbody>
             <tfoot>
               <tr className="bg-slate-100 border-t-2 border-slate-300 font-bold">
-                <td colSpan={6} className="px-3 py-2 text-xs text-slate-600 text-right">TOTALES</td>
+                <td colSpan={4} className="px-3 py-2 text-xs text-slate-600 text-right">TOTALES</td>
+                <td className="px-3 py-2 text-xs text-right text-slate-700">{n2(tot.iniC)}</td>
+                <td></td>
                 <td className="px-3 py-2 text-xs text-right text-slate-700">{S(tot.ini)}</td>
-                <td colSpan={2}></td>
+                <td className="px-3 py-2 text-xs text-right text-green-700">{n2(tot.entC)}</td>
+                <td></td>
                 <td className="px-3 py-2 text-xs text-right text-green-700">{S(tot.ent)}</td>
-                <td colSpan={2}></td>
+                <td className="px-3 py-2 text-xs text-right text-red-600">{n2(tot.salC)}</td>
+                <td></td>
                 <td className="px-3 py-2 text-xs text-right text-red-600">{S(tot.sal)}</td>
-                <td colSpan={2}></td>
+                <td className="px-3 py-2 text-xs text-right text-blue-700">{n2(tot.saldoC)}</td>
+                <td></td>
                 <td className="px-3 py-2 text-xs text-right text-blue-700">{S(tot.saldo)}</td>
               </tr>
             </tfoot>
