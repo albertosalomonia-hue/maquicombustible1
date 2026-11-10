@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { BookOpen, Filter, Plus, Scale, Search, FileDown } from 'lucide-react'
+import { BookOpen, Filter, Plus, Scale, Search, FileDown, RefreshCw } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import api from '../../services/api'
@@ -10,6 +10,7 @@ import Modal from '../../components/ui/Modal'
 import { PageLoader } from '../../components/ui/Spinner'
 import EmptyState from '../../components/ui/EmptyState'
 import { useAuth } from '../../context/AuthContext'
+import KardexIndexado from './KardexIndexado'
 
 const n2 = (n: any) => parseFloat(String(n) || '0').toFixed(2)
 const n4 = (n: any) => parseFloat(String(n) || '0').toFixed(4)
@@ -30,12 +31,14 @@ const TIPO_LABEL: Record<string, string> = {
 
 export default function KardexPage() {
   const qc = useQueryClient()
-  const { almacenId, esSupervisor } = useAuth()
+  const { almacenId, esSupervisor, user } = useAuth()
+  const esAdmin = user?.rol === 'admin'
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState({ producto_id: '', almacen_id: almacenId ? String(almacenId) : '', fecha_desde: '', fecha_hasta: '' })
   const [ajusteModal, setAjusteModal] = useState(false)
   const [page, setPage] = useState(1)
   const [exportando, setExportando] = useState(false)
+  const [vista, setVista] = useState<'detalle' | 'indexado'>('detalle')
 
   // Por defecto, el Kardex muestra solo el período contable actual (el día siguiente al
   // último cierre en adelante) en vez de todo el historial completo.
@@ -81,6 +84,25 @@ export default function KardexPage() {
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || 'Error al registrar ajuste'),
   })
+
+  const recalcularMutation = useMutation({
+    mutationFn: (producto_id?: string) => api.post('/kardex/recalcular-costos', producto_id ? { producto_id } : {}).then(r => r.data),
+    onSuccess: (r: any) => {
+      qc.invalidateQueries({ queryKey: ['kardex'] })
+      qc.invalidateQueries({ queryKey: ['kardex-indexado'] })
+      qc.invalidateQueries({ queryKey: ['inventario-multi'] })
+      toast.success(`Recalculado: ${r.lineas} líneas corregidas en ${r.pares} producto/almacén`)
+      if (r.inventarioDescuadrado?.length) toast(`${r.inventarioDescuadrado.length} producto/almacén no cuadran con el stock físico (costo de inventario sin tocar)`, { icon: '⚠️' })
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.error || 'Error al recalcular'),
+  })
+  const handleRecalcular = () => {
+    const prod = (catalogo || []).find((p: any) => String(p.id) === filters.producto_id)
+    const msg = prod
+      ? `¿Recalcular costos, saldos e inventario de "${prod.descripcion}"?`
+      : '¿Recalcular costos, saldos e inventario de TODOS los productos? Puede tardar unos segundos.'
+    if (window.confirm(msg)) recalcularMutation.mutate(filters.producto_id || undefined)
+  }
 
   const handleExportExcel = async () => {
     setExportando(true)
@@ -294,8 +316,29 @@ export default function KardexPage() {
         </div>
       </div>
 
+      {/* Selector de reporte */}
+      <div className="flex items-center gap-3">
+      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 text-sm">
+        {([['detalle', 'Kardex'], ['indexado', 'Indexado']] as const).map(([v, label]) => (
+          <button key={v} type="button" onClick={() => setVista(v)}
+            className={`px-4 py-1.5 rounded-md font-medium transition-colors ${vista === v ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {esAdmin && (
+        <button className="btn-secondary text-xs py-1.5" onClick={handleRecalcular} disabled={recalcularMutation.isPending}>
+          <RefreshCw size={14} className={recalcularMutation.isPending ? 'animate-spin' : ''} />
+          {recalcularMutation.isPending ? 'Recalculando...' : 'Recalcular'}
+        </button>
+      )}
+      </div>
+
+      {vista === 'indexado' && <KardexIndexado params={{ ...params, producto_id: filters.producto_id, search }} />}
+
       {/* Encabezado tarjeta Kardex */}
-      <div className="card p-0 overflow-hidden">
+      {vista === 'detalle' && <div className="card p-0 overflow-hidden">
         {/* Header del card */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-6 py-4 border-b border-slate-100 bg-white">
           <div className="flex items-center gap-3">
@@ -523,7 +566,7 @@ export default function KardexPage() {
               </div>
             </>
           )}
-      </div>
+      </div>}
 
       {/* Modal ajuste */}
       <Modal isOpen={ajusteModal} onClose={() => { setAjusteModal(false); ajReset() }} title="Ajuste de Inventario">

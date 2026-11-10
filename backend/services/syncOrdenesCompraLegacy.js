@@ -1,3 +1,4 @@
+const { recalcularCostosKardex } = require('./recalculoCostos');
 const ESTADO_MAP = {
   PENDIENTE: 'borrador',
   APROBADA: 'aprobada',
@@ -466,6 +467,7 @@ async function sincronizarOrdenesCompraLegacy(db) {
   }
 
   const familiasActualizadas = await sincronizarFamiliasProductos(db);
+  const entradasReprecidas = await propagarPreciosARecepciones(db);
   // Las facturas se generan al recepcionar la orden (routes/recepciones.js), no al sincronizar.
   const facturasCreadas = 0;
 
@@ -484,8 +486,71 @@ async function sincronizarOrdenesCompraLegacy(db) {
     detallesErrores: detErr,
     productosCreados,
     familiasActualizadas,
+    entradasReprecidas,
     facturasCreadas,
   };
+}
+
+// El precio de una recepción se copia al Kardex (y a recepcion_detalles / reservas) en el
+// momento de recepcionar. Si después se corrige el precio de la orden, la sync solo
+// actualizaba el detalle de la OC y la ENTRADA seguía con el precio viejo. Este paso
+// propaga el precio vigente de la OC a las entradas ya registradas. Se ejecuta en cada
+// sync (independiente de si la línea de OC cambió en esta corrida) y solo toca lo que
+// difiere. Las líneas de OC del mismo producto dentro de una orden se promedian ponderadas
+// por cantidad pedida, igual que al agrupar en la recepción. No toca entradas de períodos
+// ya cerrados (cierre_periodo_id).
+// Nota: el saldo del Kardex se recalcula al mostrarse (valor acumulado), así que basta
+// con corregir costo_unitario y valor_total de la entrada.
+async function propagarPreciosARecepciones(db) {
+  const PRECIO_VIGENTE = `(
+    SELECT orden_compra_id, producto_id,
+           SUM(cantidad_pedida * precio_unitario) / NULLIF(SUM(cantidad_pedida), 0) AS p
+    FROM maquicombus_orden_compra_detalles
+    GROUP BY orden_compra_id, producto_id
+  ) np`;
+  const JOIN_REC = `
+    JOIN maquicombus_recepciones r ON r.id = rd.recepcion_id AND r.estado <> 'anulada'
+    JOIN maquicombus_orden_compra_detalles od0 ON od0.id = rd.orden_detalle_id
+    JOIN ${PRECIO_VIGENTE} ON np.orden_compra_id = od0.orden_compra_id AND np.producto_id = rd.producto_id`;
+
+  const FILTRO_KARDEX = `
+    WHERE k.tipo_documento IN ('RECEPCION','SALDO_INICIAL') AND k.movimiento = 'entrada'
+      AND k.cierre_periodo_id IS NULL AND np.p IS NOT NULL
+      AND ABS(k.costo_unitario - np.p) > 0.00005`;
+  // (producto, almacén) cuyas entradas cambian de precio: hay que recalcular su Kardex.
+  const [afectados] = await db.query(`
+    SELECT DISTINCT k.producto_id, k.almacen_id
+    FROM maquicombus_kardex k
+    JOIN maquicombus_recepcion_detalles rd ON k.referencia_id = rd.recepcion_id AND k.producto_id = rd.producto_id
+    ${JOIN_REC}
+    ${FILTRO_KARDEX}
+  `);
+  const [kRes] = await db.query(`
+    UPDATE maquicombus_kardex k
+    JOIN maquicombus_recepcion_detalles rd ON k.referencia_id = rd.recepcion_id AND k.producto_id = rd.producto_id
+    ${JOIN_REC}
+    SET k.costo_unitario = np.p, k.valor_total = k.cantidad * np.p
+    ${FILTRO_KARDEX}
+  `);
+  await db.query(`
+    UPDATE maquicombus_reservas rs
+    JOIN maquicombus_recepcion_detalles rd ON rs.recepcion_detalle_id = rd.id
+    ${JOIN_REC}
+    SET rs.costo_unitario = np.p
+    WHERE np.p IS NOT NULL AND ABS(rs.costo_unitario - np.p) > 0.00005
+  `);
+  await db.query(`
+    UPDATE maquicombus_recepcion_detalles rd
+    ${JOIN_REC}
+    SET rd.precio_unitario = np.p
+    WHERE np.p IS NOT NULL AND ABS(rd.precio_unitario - np.p) > 0.00005
+  `);
+  // Salidas, transferencias, saldos corridos e inventario dependen del costo de esas entradas.
+  if (afectados.length) {
+    const r = await recalcularCostosKardex(db, afectados.map(a => [a.producto_id, a.almacen_id]));
+    if (r.inventarioDescuadrado.length) console.warn('[sync OC] Kardex vs stock físico no cuadra:', JSON.stringify(r.inventarioDescuadrado));
+  }
+  return kRes.changedRows || 0;
 }
 
 // Crea en erp_facturas el registro correspondiente a toda OC que ya tenga

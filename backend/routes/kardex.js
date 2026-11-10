@@ -1,6 +1,7 @@
 const router = require('../router').Router();
 const { pool } = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('../middleware/auth');
+const { recalcularCostosKardex } = require('../services/recalculoCostos');
 const { assertPeriodoAbierto } = require('../services/cierrePeriodo');
 
 router.use(authMiddleware);
@@ -122,6 +123,83 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al obtener erp_kardex' });
+  }
+});
+
+// GET /api/kardex/indexado - una línea por producto con entradas, salidas y saldo acumulados
+// (sin fecha: resume el movimiento del producto en el rango/almacén filtrado).
+router.get('/indexado', async (req, res) => {
+  try {
+    const { search, producto_id, almacen_id, centro_costo_id, fecha_desde, fecha_hasta } = req.query;
+    let where = `WHERE COALESCE(NULLIF(p.familia,''), '') NOT IN (${CATEGORIAS_OCULTAS_KARDEX.map(() => '?').join(',')})
+                 AND k.producto_id NOT IN (${PRODUCTOS_OCULTOS_KARDEX.map(() => '?').join(',')})`;
+    const params = [...CATEGORIAS_OCULTAS_KARDEX, ...PRODUCTOS_OCULTOS_KARDEX];
+    if (search) {
+      where += ' AND (p.sku LIKE ? OR p.descripcion LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    if (producto_id) { where += ' AND k.producto_id = ?'; params.push(producto_id); }
+    if (almacen_id) {
+      where += ' AND k.almacen_id = ?'; params.push(almacen_id);
+    } else {
+      // Vista consolidada de todos los almacenes: las transferencias internas se anulan entre sí.
+      where += " AND k.tipo_documento NOT IN ('TRANSFERENCIA_IN','TRANSFERENCIA_OUT')";
+    }
+    if (centro_costo_id) { where += ' AND k.centro_costo_id = ?'; params.push(centro_costo_id); }
+    if (fecha_desde) { where += ' AND k.fecha >= ?'; params.push(fecha_desde); }
+    if (fecha_hasta) { where += ' AND k.fecha <= ?'; params.push(fecha_hasta); }
+
+    const [rows] = await pool.query(
+      `SELECT p.id AS producto_id, p.sku, p.descripcion AS producto_descripcion,
+              COALESCE(NULLIF(p.familia, ''), 'SIN CATEGORÍA') AS categoria,
+              um.codigo AS unidad,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.cantidad END), 0) AS entrada_cantidad,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.valor_total END), 0) AS entrada_valor,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.cantidad END), 0) AS salida_cantidad,
+              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.valor_total END), 0) AS salida_valor
+       FROM maquicombus_kardex k
+       JOIN maquicombus_productos p ON k.producto_id = p.id
+       LEFT JOIN maquicombus_unidades_medida um ON p.unidad_medida_id = um.id
+       ${where}
+       GROUP BY p.id, p.sku, p.descripcion, p.familia, um.codigo
+       ORDER BY p.descripcion ASC`,
+      params
+    );
+    const data = rows.map(r => {
+      const entCant = parseFloat(r.entrada_cantidad), entVal = parseFloat(r.entrada_valor);
+      const salCant = parseFloat(r.salida_cantidad), salVal = parseFloat(r.salida_valor);
+      const saldoCant = entCant - salCant, saldoVal = entVal - salVal;
+      return {
+        ...r,
+        entrada_costo_unitario: entCant > 0 ? entVal / entCant : 0,
+        salida_costo_unitario: salCant > 0 ? salVal / salCant : 0,
+        saldo_cantidad: saldoCant,
+        saldo_valor: saldoVal,
+        saldo_costo_unitario: saldoCant > 0.00005 ? saldoVal / saldoCant : 0,
+      };
+    });
+    res.json({ data, total: data.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener kardex indexado' });
+  }
+});
+
+// POST /api/kardex/recalcular-costos  { producto_id? }
+// Reproduce el historial de cada producto/almacén y corrige costos de salidas,
+// transferencias, saldos corridos y costo promedio de inventario (ver services/recalculoCostos.js).
+router.post('/recalcular-costos', requireRole('admin'), async (req, res) => {
+  try {
+    const { producto_id } = req.body || {};
+    const [pares] = await pool.query(
+      `SELECT DISTINCT producto_id, almacen_id FROM maquicombus_kardex ${producto_id ? 'WHERE producto_id = ?' : ''}`,
+      producto_id ? [producto_id] : []
+    );
+    const resumen = await recalcularCostosKardex(pool, pares.map(p => [p.producto_id, p.almacen_id]));
+    res.json(resumen);
+  } catch (err) {
+    console.error('[kardex/recalcular-costos]', err);
+    res.status(500).json({ error: 'Error al recalcular costos del Kardex' });
   }
 });
 
