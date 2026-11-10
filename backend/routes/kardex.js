@@ -147,38 +147,45 @@ router.get('/indexado', async (req, res) => {
       where += " AND k.tipo_documento NOT IN ('TRANSFERENCIA_IN','TRANSFERENCIA_OUT')";
     }
     if (centro_costo_id) { where += ' AND k.centro_costo_id = ?'; params.push(centro_costo_id); }
-    if (fecha_desde) { where += ' AND k.fecha >= ?'; params.push(fecha_desde); }
     if (fecha_hasta) { where += ' AND k.fecha <= ?'; params.push(fecha_hasta); }
 
+    // Inventario inicial = movimientos anteriores a fecha_desde; entradas/salidas = los del rango.
+    const antes = fecha_desde ? 'k.fecha < ?' : '1 = 0';
+    const rango = fecha_desde ? 'k.fecha >= ?' : '1 = 1';
+    const sum = (cond, mov, col) => `COALESCE(SUM(CASE WHEN ${cond} AND k.movimiento = '${mov}' THEN k.${col} END), 0)`;
+    const fechas = fecha_desde ? [fecha_desde] : [];
     const [rows] = await pool.query(
       `SELECT p.id AS producto_id, p.sku, p.descripcion AS producto_descripcion,
               COALESCE(NULLIF(p.familia, ''), 'SIN CATEGORÍA') AS categoria,
               um.codigo AS unidad,
-              COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.cantidad END), 0) AS entrada_cantidad,
-              COALESCE(SUM(CASE WHEN k.movimiento = 'entrada' THEN k.valor_total END), 0) AS entrada_valor,
-              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.cantidad END), 0) AS salida_cantidad,
-              COALESCE(SUM(CASE WHEN k.movimiento = 'salida' THEN k.valor_total END), 0) AS salida_valor
+              ${sum(antes, 'entrada', 'cantidad')} AS ini_ent_cantidad, ${sum(antes, 'entrada', 'valor_total')} AS ini_ent_valor,
+              ${sum(antes, 'salida', 'cantidad')} AS ini_sal_cantidad, ${sum(antes, 'salida', 'valor_total')} AS ini_sal_valor,
+              ${sum(rango, 'entrada', 'cantidad')} AS entrada_cantidad, ${sum(rango, 'entrada', 'valor_total')} AS entrada_valor,
+              ${sum(rango, 'salida', 'cantidad')} AS salida_cantidad, ${sum(rango, 'salida', 'valor_total')} AS salida_valor
        FROM maquicombus_kardex k
        JOIN maquicombus_productos p ON k.producto_id = p.id
        LEFT JOIN maquicombus_unidades_medida um ON p.unidad_medida_id = um.id
        ${where}
        GROUP BY p.id, p.sku, p.descripcion, p.familia, um.codigo
        ORDER BY p.descripcion ASC`,
-      params
+      [...fechas, ...fechas, ...fechas, ...fechas, ...fechas, ...fechas, ...fechas, ...fechas, ...params]
     );
+    const cu = (v, c) => (c > 0.00005 ? v / c : 0);
     const data = rows.map(r => {
+      const iniCant = parseFloat(r.ini_ent_cantidad) - parseFloat(r.ini_sal_cantidad);
+      const iniVal = parseFloat(r.ini_ent_valor) - parseFloat(r.ini_sal_valor);
       const entCant = parseFloat(r.entrada_cantidad), entVal = parseFloat(r.entrada_valor);
       const salCant = parseFloat(r.salida_cantidad), salVal = parseFloat(r.salida_valor);
-      const saldoCant = entCant - salCant, saldoVal = entVal - salVal;
+      const saldoCant = iniCant + entCant - salCant, saldoVal = iniVal + entVal - salVal;
       return {
-        ...r,
-        entrada_costo_unitario: entCant > 0 ? entVal / entCant : 0,
-        salida_costo_unitario: salCant > 0 ? salVal / salCant : 0,
-        saldo_cantidad: saldoCant,
-        saldo_valor: saldoVal,
-        saldo_costo_unitario: saldoCant > 0.00005 ? saldoVal / saldoCant : 0,
+        producto_id: r.producto_id, sku: r.sku, producto_descripcion: r.producto_descripcion,
+        categoria: r.categoria, unidad: r.unidad,
+        inicial_cantidad: iniCant, inicial_valor: iniVal, inicial_costo_unitario: cu(iniVal, iniCant),
+        entrada_cantidad: entCant, entrada_valor: entVal, entrada_costo_unitario: cu(entVal, entCant),
+        salida_cantidad: salCant, salida_valor: salVal, salida_costo_unitario: cu(salVal, salCant),
+        saldo_cantidad: saldoCant, saldo_valor: saldoVal, saldo_costo_unitario: cu(saldoVal, saldoCant),
       };
-    });
+    }).filter(r => Math.abs(r.inicial_cantidad) > 0.00005 || r.entrada_cantidad > 0 || r.salida_cantidad > 0);
     res.json({ data, total: data.length });
   } catch (err) {
     console.error(err);

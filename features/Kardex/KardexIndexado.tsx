@@ -24,10 +24,11 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
   const filas: any[] = data?.data || []
 
   const tot = filas.reduce((a, f) => ({
+    ini: a.ini + parseFloat(f.inicial_valor || 0),
     ent: a.ent + parseFloat(f.entrada_valor || 0),
     sal: a.sal + parseFloat(f.salida_valor || 0),
     saldo: a.saldo + parseFloat(f.saldo_valor || 0),
-  }), { ent: 0, sal: 0, saldo: 0 })
+  }), { ini: 0, ent: 0, sal: 0, saldo: 0 })
 
   const handleExport = async () => {
     if (!filas.length) { toast.error('No hay datos para exportar'); return }
@@ -37,24 +38,26 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
       const wb = new ExcelJS.Workbook()
       wb.creator = 'KardexERP 2026'
       const ws = wb.addWorksheet('Indexado', { views: [{ state: 'frozen', ySplit: 2 }] })
-      ws.columns = [16, 38, 20, 10, 11, 11, 13, 11, 11, 13, 11, 13, 13].map(width => ({ width }))
+      ws.columns = [16, 38, 20, 10, 11, 12, 13, 11, 11, 13, 11, 11, 13, 11, 13, 13].map(width => ({ width }))
 
       const simples: [string, string][] = [['A', 'SKU'], ['B', 'Producto'], ['C', 'Categoría'], ['D', 'Unidad']]
       simples.forEach(([c, l]) => { ws.mergeCells(`${c}1:${c}2`); ws.getCell(`${c}1`).value = l })
-      ws.mergeCells('E1:G1'); ws.getCell('E1').value = 'ENTRADAS'
-      ws.mergeCells('H1:J1'); ws.getCell('H1').value = 'SALIDAS'
-      ws.mergeCells('K1:M1'); ws.getCell('K1').value = 'SALDO'
+      ws.mergeCells('E1:G1'); ws.getCell('E1').value = 'INVENTARIO INICIAL'
+      ws.mergeCells('H1:J1'); ws.getCell('H1').value = 'ENTRADAS'
+      ws.mergeCells('K1:M1'); ws.getCell('K1').value = 'SALIDAS'
+      ws.mergeCells('N1:P1'); ws.getCell('N1').value = 'INVENTARIO FINAL'
       const subs: Record<string, string> = {
-        E2: 'Cant.', F2: 'P.U.', G2: 'Total', H2: 'Cant.', I2: 'P.U.', J2: 'Total',
-        K2: 'Cant.', L2: 'C.U. Prom.', M2: 'Total',
+        E2: 'Cant.', F2: 'C.U. Prom.', G2: 'Total', H2: 'Cant.', I2: 'P.U.', J2: 'Total',
+        K2: 'Cant.', L2: 'P.U.', M2: 'Total', N2: 'Cant.', O2: 'C.U. Prom.', P2: 'Total',
       }
       Object.entries(subs).forEach(([a, v]) => { ws.getCell(a).value = v })
 
       const grupos: [string[], string][] = [
         [['A1', 'B1', 'C1', 'D1'], 'FF1E293B'],
-        [['E1', 'F1', 'G1', 'E2', 'F2', 'G2'], 'FF15803D'],
-        [['H1', 'I1', 'J1', 'H2', 'I2', 'J2'], 'FFB91C1C'],
-        [['K1', 'L1', 'M1', 'K2', 'L2', 'M2'], 'FF1D4ED8'],
+        [['E1', 'F1', 'G1', 'E2', 'F2', 'G2'], 'FF475569'],
+        [['H1', 'I1', 'J1', 'H2', 'I2', 'J2'], 'FF15803D'],
+        [['K1', 'L1', 'M1', 'K2', 'L2', 'M2'], 'FFB91C1C'],
+        [['N1', 'O1', 'P1', 'N2', 'O2', 'P2'], 'FF1D4ED8'],
       ]
       grupos.forEach(([addrs, bg]) => addrs.forEach(a => {
         const c = ws.getCell(a)
@@ -66,17 +69,18 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
       filas.forEach(f => {
         const row = ws.addRow([
           f.sku, f.producto_descripcion, f.categoria, f.unidad || '',
+          parseFloat(f.inicial_cantidad), parseFloat(f.inicial_costo_unitario), parseFloat(f.inicial_valor),
           parseFloat(f.entrada_cantidad), parseFloat(f.entrada_costo_unitario), parseFloat(f.entrada_valor),
           parseFloat(f.salida_cantidad), parseFloat(f.salida_costo_unitario), parseFloat(f.salida_valor),
           parseFloat(f.saldo_cantidad), parseFloat(f.saldo_costo_unitario), parseFloat(f.saldo_valor),
         ])
-        ;[6, 7, 9, 10, 12, 13].forEach(c => { row.getCell(c).numFmt = '"S/ "#,##0.00' })
-        ;[5, 8, 11].forEach(c => { row.getCell(c).numFmt = '#,##0.00' })
+        ;[6, 7, 9, 10, 12, 13, 15, 16].forEach(c => { row.getCell(c).numFmt = '"S/ "#,##0.00' })
+        ;[5, 8, 11, 14].forEach(c => { row.getCell(c).numFmt = '#,##0.00' })
       })
-      const t = ws.addRow(['', '', '', 'TOTALES', '', '', tot.ent, '', '', tot.sal, '', '', tot.saldo])
+      const t = ws.addRow(['', '', '', 'TOTALES', '', '', tot.ini, '', '', tot.ent, '', '', tot.sal, '', '', tot.saldo])
       t.font = { bold: true }
-      ;[7, 10, 13].forEach(c => { t.getCell(c).numFmt = '"S/ "#,##0.00' })
-      ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 13 } }
+      ;[7, 10, 13, 16].forEach(c => { t.getCell(c).numFmt = '"S/ "#,##0.00' })
+      ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 16 } }
 
       const buffer = await wb.xlsx.writeBuffer()
       const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
@@ -105,7 +109,7 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
           <div className="p-2 bg-blue-50 rounded-lg"><ListOrdered size={18} className="text-blue-600" /></div>
           <div>
             <p className="font-bold text-slate-900 text-base">Kardex Indexado</p>
-            <p className="text-xs text-slate-500 mt-0.5">Una línea por producto: entradas, salidas y saldo acumulados</p>
+            <p className="text-xs text-slate-500 mt-0.5">Una línea por producto: inventario inicial + entradas − salidas = inventario final</p>
           </div>
         </div>
         <div className="sm:ml-auto flex items-center gap-3">
@@ -129,11 +133,15 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
                 <th className={thL} rowSpan={2}>Producto</th>
                 <th className={thL} rowSpan={2}>Categoría</th>
                 <th className={thL} rowSpan={2}>Unidad</th>
+                <th colSpan={3} className="px-3 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 text-center border-x border-slate-300">INV. INICIAL</th>
                 <th colSpan={3} className="px-3 py-1.5 text-xs font-bold text-green-700 bg-green-50 text-center border-x border-green-200">ENTRADAS</th>
                 <th colSpan={3} className="px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 text-center border-x border-red-200">SALIDAS</th>
-                <th colSpan={3} className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 text-center border-x border-blue-200">SALDO</th>
+                <th colSpan={3} className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 text-center border-x border-blue-200">INV. FINAL</th>
               </tr>
               <tr className="border-b border-slate-200">
+                <th className={`${th} bg-slate-100 border-l border-slate-300`}>Cant.</th>
+                <th className={`${th} bg-slate-100`}>C.U. Prom.</th>
+                <th className={`${th} bg-slate-100 border-r border-slate-300`}>Total</th>
                 <th className={`${th} bg-green-50 border-l border-green-200`}>Cant.</th>
                 <th className={`${th} bg-green-50`}>P.U.</th>
                 <th className={`${th} bg-green-50 border-r border-green-200`}>Total</th>
@@ -152,6 +160,9 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
                   <td className={`${tdL} font-medium text-slate-800 min-w-[220px]`}>{f.producto_descripcion}</td>
                   <td className={`${tdL} text-slate-500`}>{f.categoria}</td>
                   <td className={`${tdL} text-slate-500`}>{f.unidad || '—'}</td>
+                  <td className={`${td} border-l border-slate-200 text-slate-700 font-semibold`}>{n2(f.inicial_cantidad)}</td>
+                  <td className={`${td} text-slate-500`}>{S(f.inicial_costo_unitario)}</td>
+                  <td className={`${td} border-r border-slate-200 text-slate-700 font-bold`}>{S(f.inicial_valor)}</td>
                   <td className={`${td} border-l border-green-100 text-green-700 font-semibold`}>{n2(f.entrada_cantidad)}</td>
                   <td className={`${td} text-green-600`}>{S(f.entrada_costo_unitario)}</td>
                   <td className={`${td} border-r border-green-100 text-green-700 font-bold`}>{S(f.entrada_valor)}</td>
@@ -167,6 +178,8 @@ export default function KardexIndexado({ params }: { params: Record<string, any>
             <tfoot>
               <tr className="bg-slate-100 border-t-2 border-slate-300 font-bold">
                 <td colSpan={6} className="px-3 py-2 text-xs text-slate-600 text-right">TOTALES</td>
+                <td className="px-3 py-2 text-xs text-right text-slate-700">{S(tot.ini)}</td>
+                <td colSpan={2}></td>
                 <td className="px-3 py-2 text-xs text-right text-green-700">{S(tot.ent)}</td>
                 <td colSpan={2}></td>
                 <td className="px-3 py-2 text-xs text-right text-red-600">{S(tot.sal)}</td>
